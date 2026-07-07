@@ -1,0 +1,46 @@
+/* TherapyAgent UI/security fixes: keep logged-in users in workspace and never display temporary passwords. */
+body.app-authenticated .public-section,
+body.app-has-token .public-section {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+body.app-authenticated #workspace {
+  display: grid !important;
+  visibility: visible !important;
+}
+body.app-anonymous #workspace {
+  display: none !important;
+}
+body.app-authenticated #publicNav,
+body.app-has-token #publicNav {
+  display: none !important;
+}
+body.app-authenticated #userNav {
+  display: flex !important;
+}
+.secure-password-card {
+  width: min(520px, 94vw);
+  padding: 30px;
+}
+.secure-password-card h3 {
+  margin: 0 36px 8px 0;
+  color: var(--blue-900);
+}
+.secure-password-help {
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+.secure-password-modal .modal-card {
+  max-height: 90vh;
+  overflow: auto;
+}
+#inviteOutput {
+  white-space: normal;
+  word-break: break-word;
+}

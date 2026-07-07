@@ -9,8 +9,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ui-fixes.css">
 </head>
-<body>
+<body class="app-anonymous">
   <header class="topbar">
     <div class="brand">
       <div class="mark">TA</div>
@@ -121,7 +122,7 @@
               <label>First name<input name="firstName" required></label>
               <label>Last name<input name="lastName" required></label>
               <label>Email / Login<input name="email" type="email" required></label>
-              <label>Initial password<input name="initialPassword" required></label>
+              <label>Initial password<input name="initialPassword" type="password" autocomplete="new-password" required></label>
               <label>Role<select name="role" class="roleSelect"></select></label>
             </div>
             <div class="form-actions"><button class="btn">Create user</button></div>
@@ -153,13 +154,14 @@
           <div class="auth-tabs" role="tablist"><button class="auth-tab active" data-auth-screen="login" type="button">Login</button><button class="auth-tab" data-auth-screen="register" type="button">Create Account</button><button class="auth-tab" data-auth-screen="forgot" type="button">Forgot Password</button></div>
           <div id="authMessage" class="auth-message" aria-live="polite"></div>
           <section class="auth-screen active" id="auth-login"><h3>Login</h3><form id="loginForm" class="auth-form"><label>Email / Login<input name="email" type="email" required autocomplete="email"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><label>MFA code<input name="totp" inputmode="numeric" placeholder="6-digit code"></label><button class="btn">Login</button></form></section>
-          <section class="auth-screen" id="auth-register"><h3>Create Account</h3><form id="registerForm" class="auth-form"><label>Organization<input id="orgSearch" name="organizationName" list="organizationOptions" required autocomplete="organization"><input id="organizationId" name="organizationId" type="hidden"><datalist id="organizationOptions"></datalist><small id="orgHint">Type at least 2 characters to search or create a new organization.</small></label><div class="two"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label></div><label>Email / Login<input name="email" type="email" required></label><label>Password<input name="password" type="password" required minlength="10"></label><button class="btn">Create account</button></form><div id="mfaSetupPanel" class="mfa-panel" hidden><h4>Enable MFA</h4><p>Add account manually in your Authenticator app using this setup key:</p><code id="mfaSecret"></code><form id="mfaForm" class="auth-form"><label>6-digit MFA code<input name="totp" required inputmode="numeric"></label><button class="btn">Verify MFA</button><button class="btn secondary" type="button" id="goLoginAfterMfa">Go to Login</button></form></div></section>
-          <section class="auth-screen" id="auth-forgot"><h3>Forgot Password</h3><form id="forgotForm" class="auth-form"><label>Email / Login<input name="email" type="email" required></label><button class="btn">Request reset</button></form></section>
+          <section class="auth-screen" id="auth-register"><h3>Create Account</h3><form id="registerForm" class="auth-form"><label>Organization<input id="orgSearch" name="organizationName" list="organizationOptions" required autocomplete="organization"><input id="organizationId" name="organizationId" type="hidden"><datalist id="organizationOptions"></datalist><small id="orgHint">Type at least 2 characters to search or create a new organization.</small></label><div class="two"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label></div><label>Email / Login<input name="email" type="email" required></label><label>Password<input name="password" type="password" required minlength="10" autocomplete="new-password"></label><button class="btn">Create account</button></form><div id="mfaSetupPanel" class="mfa-panel" hidden><h4>Enable MFA</h4><p>Add account manually in your Authenticator app using this setup key:</p><code id="mfaSecret"></code><form id="mfaForm" class="auth-form"><label>6-digit MFA code<input name="totp" required inputmode="numeric"></label><button class="btn">Verify MFA</button><button class="btn secondary" type="button" id="goLoginAfterMfa">Go to Login</button></form></div></section>
+          <section class="auth-screen" id="auth-forgot"><h3>Forgot Password</h3><form id="forgotForm" class="auth-form"><label>Email / Login<input name="email" type="email" required autocomplete="email"></label><button class="btn">Request reset</button></form></section>
         </section>
       </div>
     </div>
   </div>
 
   <script src="/app.js"></script>
+  <script src="/ui-fixes.js"></script>
 </body>
 </html>
