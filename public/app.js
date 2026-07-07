@@ -1,62 +1,129 @@
 let token = localStorage.getItem("ta_token") || "";
 let currentUser = null;
-let currentPermissions = {};
 let patients = [];
 let organizationMatches = [];
-let activeRecognition = null;
+let orgUsers = [];
+let roleMatrix = null;
+let activePatient = null;
+let patientSummary = null;
 let activeVoice = null;
-let rolePermissions = {};
-let selectedRole = "org_admin";
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
-const PERMISSION_LABELS = {
-  view_patients: "Can view patients",
-  edit_patients: "Can add/edit patients",
-  record_sessions: "Can record sessions",
-  record_behavior_events: "Can record behavior events",
-  create_therapy_plans: "Can create therapy plans",
-  approve_plans: "Can approve/sign plans",
-  create_incidents: "Can create incidents",
-  generate_reports: "Can generate AI reports",
-  sign_records: "Can sign records",
-  manage_users: "Can manage users",
-  manage_roles: "Can manage roles",
-  view_audit: "Can view audit"
+const roles = ["org_admin", "bcba", "supervisor", "therapist", "rbt", "billing_auditor", "read_only"];
+
+const resourceDefs = {
+  sessions: {
+    title: "Session Logs",
+    singular: "session",
+    endpoint: "/api/sessions",
+    listKey: "sessions",
+    voiceField: "progress_notes",
+    columns: ["patient", "status", "session_date", "location", "created_by_name", "created_at", "modified_by_name", "modified_at"],
+    fields: [
+      { name: "patient_id", label: "Patient", type: "patient", required: true },
+      { name: "session_date", label: "Session date", type: "date" },
+      { name: "start_time", label: "Start time", type: "time" },
+      { name: "end_time", label: "End time", type: "time" },
+      { name: "location", label: "Location" },
+      { name: "service_code", label: "Service code" },
+      { name: "participants", label: "Participants", type: "textarea" },
+      { name: "activities", label: "Activities performed", type: "textarea" },
+      { name: "interventions_used", label: "Interventions used", type: "textarea" },
+      { name: "response_to_intervention", label: "Response to intervention", type: "textarea" },
+      { name: "progress_notes", label: "Raw voice / progress notes", type: "textarea", wide: true },
+      { name: "ai_summary", label: "AI summary / clinician notes", type: "textarea", wide: true }
+    ]
+  },
+  behaviors: {
+    title: "Behavior Events",
+    singular: "behavior",
+    endpoint: "/api/behaviors",
+    listKey: "behaviors",
+    voiceField: "notes",
+    columns: ["patient", "status", "event_time", "behavior", "location", "created_by_name", "created_at", "modified_by_name", "modified_at"],
+    fields: [
+      { name: "patient_id", label: "Patient", type: "patient", required: true },
+      { name: "event_time", label: "Event time", type: "datetime-local" },
+      { name: "location", label: "Location" },
+      { name: "intensity", label: "Intensity 1-5", type: "number", attrs: "min='1' max='5'" },
+      { name: "duration_seconds", label: "Duration seconds", type: "number" },
+      { name: "antecedent", label: "Antecedent", type: "textarea" },
+      { name: "behavior", label: "Behavior observed", type: "textarea", required: true },
+      { name: "consequence", label: "Consequence", type: "textarea" },
+      { name: "suspected_function", label: "Suspected function" },
+      { name: "deescalation", label: "De-escalation used", type: "textarea" },
+      { name: "injury", label: "Injury occurred", type: "checkbox" },
+      { name: "restraint", label: "Restraint used", type: "checkbox" },
+      { name: "notes", label: "Raw voice / additional notes", type: "textarea", wide: true }
+    ]
+  },
+  plans: {
+    title: "Therapy Plans",
+    singular: "plan",
+    endpoint: "/api/plans",
+    listKey: "plans",
+    voiceField: "goals",
+    columns: ["patient", "status", "title", "plan_type", "created_by_name", "created_at", "modified_by_name", "modified_at"],
+    fields: [
+      { name: "patient_id", label: "Patient", type: "patient", required: true },
+      { name: "title", label: "Plan title", required: true },
+      { name: "plan_type", label: "Plan type" },
+      { name: "effective_from", label: "Effective from", type: "date" },
+      { name: "effective_to", label: "Effective to", type: "date" },
+      { name: "goals", label: "Goals", type: "textarea", wide: true },
+      { name: "interventions", label: "Interventions", type: "textarea", wide: true },
+      { name: "restrictions", label: "Restrictions / contraindications", type: "textarea", wide: true }
+    ]
+  },
+  incidents: {
+    title: "Incidents",
+    singular: "incident",
+    endpoint: "/api/incidents",
+    listKey: "incidents",
+    voiceField: "description",
+    columns: ["patient", "status", "incident_date", "category", "severity", "created_by_name", "created_at", "modified_by_name", "modified_at"],
+    fields: [
+      { name: "patient_id", label: "Patient", type: "patient", required: true },
+      { name: "incident_date", label: "Incident date/time", type: "datetime-local" },
+      { name: "category", label: "Category", required: true },
+      { name: "severity", label: "Severity", type: "select", options: ["low", "medium", "high", "critical"] },
+      { name: "location", label: "Location" },
+      { name: "description", label: "Description", type: "textarea", required: true, wide: true },
+      { name: "immediate_actions", label: "Immediate actions", type: "textarea", wide: true },
+      { name: "notifications", label: "Notifications", type: "textarea", wide: true }
+    ]
+  },
+  reports: {
+    title: "AI Reports",
+    singular: "report",
+    endpoint: "/api/reports",
+    listKey: "reports",
+    voiceField: "prompt",
+    columns: ["patient", "status", "report_type", "created_by_name", "created_at", "modified_by_name", "modified_at"],
+    fields: [
+      { name: "patient_id", label: "Patient", type: "patient", required: true },
+      { name: "report_type", label: "Report type", type: "select", options: ["session_summary", "monthly_progress", "incident_summary", "caregiver_report"] },
+      { name: "prompt", label: "Raw notes / report request", type: "textarea", wide: true },
+      { name: "output", label: "Report draft", type: "textarea", required: true, wide: true }
+    ]
+  }
 };
 
-function panel(id) {
-  $$(".sidebar button").forEach(b => b.classList.toggle("active", b.dataset.panel === id));
-  $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
-  if (id === "admin") loadAdmin();
+function escapeHtml(value = "") {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
-
-function setAuthScreen(name) {
-  $$(".auth-tab").forEach(b => b.classList.toggle("active", b.dataset.authScreen === name));
-  $$(".auth-screen").forEach(s => s.classList.toggle("active", s.id === `auth-${name}`));
-  clearAuthMessage();
-}
-
-function openAuth(screen = "login") {
-  $("#authModal")?.classList.add("show");
-  $("#authModal")?.setAttribute("aria-hidden", "false");
-  setAuthScreen(screen);
-}
-
-function closeAuth() {
-  $("#authModal")?.classList.remove("show");
-  $("#authModal")?.setAttribute("aria-hidden", "true");
-}
-
-function setAuthMessage(message, type = "info") {
-  const el = $("#authMessage");
-  if (!el) return;
-  el.textContent = message || "";
-  el.className = `auth-message ${message ? "show" : ""} ${type}`;
-  if (message) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
-function clearAuthMessage() { setAuthMessage(""); }
-function friendlyError(err) { return err?.message || String(err || "Something went wrong. Please try again."); }
+function fmtDate(value) { if (!value) return ""; try { return new Date(value).toLocaleString(); } catch { return String(value); } }
+function dateInput(value) { if (!value) return ""; return String(value).slice(0, 10); }
+function dtInput(value) { if (!value) return ""; const d = new Date(value); if (Number.isNaN(+d)) return String(value).slice(0,16); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16); }
+function patientName(row) { return row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : patients.find(p => p.id === row.patient_id)?.full_name || patients.find(p => p.id === row.patient_id)?.first_name || ""; }
+function fullPatientName(p) { return `${p.first_name || ""} ${p.last_name || ""}`.trim(); }
+function isAdmin() { return currentUser?.role === "org_admin"; }
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -68,69 +135,410 @@ async function api(path, opts = {}) {
     }
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.error || "Request failed.");
+  if (!res.ok) throw new Error(data.message || data.detail || data.error || "Request failed.");
   return data;
 }
-
 function formBody(form) { return Object.fromEntries(new FormData(form).entries()); }
-function requiredMissing(form) {
-  return [...form.querySelectorAll("[required]")]
-    .filter(el => !String(el.value || "").trim())
-    .map(el => el.closest("label")?.firstChild?.textContent?.trim() || el.placeholder || el.name || "Required field");
-}
-function setField(form, name, value, overwrite = false) {
-  if (value === undefined || value === null || value === "") return;
-  const el = form.querySelector(`[name="${CSS.escape(name)}"]`) || document.getElementById(name);
+function setMessage(el, message, type = "info") {
   if (!el) return;
-  if (!overwrite && String(el.value || "").trim()) return;
-  el.value = value;
+  el.textContent = message || "";
+  el.className = `message ${message ? "show" : ""} ${type}`;
 }
-function escapeHtml(value = "") {
-  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+function setAuthMessage(message, type = "info") {
+  const el = $("#authMessage");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `auth-message ${message ? "show" : ""} ${type}`;
+}
+function setAuthScreen(name) {
+  $$(".auth-tab").forEach(b => b.classList.toggle("active", b.dataset.authScreen === name));
+  $$(".auth-screen").forEach(s => s.classList.toggle("active", s.id === `auth-${name}`));
+  setAuthMessage("");
+}
+function openAuth(screen = "login") { $("#authModal")?.classList.add("show"); $("#authModal")?.setAttribute("aria-hidden", "false"); setAuthScreen(screen); }
+function closeAuth() { $("#authModal")?.classList.remove("show"); $("#authModal")?.setAttribute("aria-hidden", "true"); }
+
+function setAuthenticatedUI() {
+  document.body.classList.toggle("app-authenticated", !!currentUser);
+  document.body.classList.toggle("app-anonymous", !currentUser);
+  $("#publicNav") && ($("#publicNav").hidden = !!currentUser);
+  $("#userNav") && ($("#userNav").hidden = !currentUser);
+  $("#welcomeUser") && ($("#welcomeUser").textContent = currentUser ? `Welcome ${currentUser.full_name || currentUser.name || currentUser.email}` : "Welcome");
+  $$(".public-section").forEach(s => s.hidden = !!currentUser);
+  $("#workspace") && ($("#workspace").hidden = !currentUser);
+  if (currentUser) panel("dashboard");
+}
+function logout() { token = ""; currentUser = null; localStorage.removeItem("ta_token"); setAuthenticatedUI(); openAuth("login"); }
+
+function panel(id) {
+  if (!currentUser && id !== "dashboard") return openAuth("login");
+  $$(".sidebar button").forEach(b => b.classList.toggle("active", b.dataset.panel === id));
+  $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
+  if (id === "patients") loadPatients();
+  if (id === "inbox") loadInbox();
+  if (resourceDefs[id]) loadResourceList(id);
+  if (id === "admin") loadAdmin();
 }
 
-function updateAuthState() {
-  document.body.classList.toggle("authenticated", Boolean(currentUser && token && currentUser.mfa_enabled));
-  const area = $("#authArea");
-  if (!area) return;
-  if (currentUser && token && currentUser.mfa_enabled) {
-    area.innerHTML = `<span class="welcome">Welcome ${escapeHtml(currentUser.full_name || currentUser.email)}</span><button id="logoutBtn" class="btn small secondary" type="button">Logoff</button>`;
-    $("#logoutBtn")?.addEventListener("click", logout);
-    $("#workspaceWelcome").textContent = `Logged in as ${currentUser.full_name} (${currentUser.role}).`;
-  } else {
-    area.innerHTML = `<button id="openAuth" class="btn small" type="button">Login</button>`;
-    $("#openAuth")?.addEventListener("click", () => openAuth("login"));
-  }
-}
-
-function logout() {
-  token = ""; currentUser = null; currentPermissions = {}; patients = [];
-  localStorage.removeItem("ta_token");
-  updateAuthState();
-  renderPatients();
-  openAuth("login");
-}
-
-async function loadMe() {
-  if (!token) { updateAuthState(); return; }
+async function initAuth() {
+  if (!token) { setAuthenticatedUI(); return; }
   try {
     const out = await api("/api/me");
     currentUser = out.user;
-    currentPermissions = out.permissions || {};
-    updateAuthState();
-    if (currentUser?.mfa_enabled) await refreshPatients();
-  } catch {
-    logout();
-  }
+    setAuthenticatedUI();
+    await loadPatients();
+    await refreshDashboard();
+  } catch (e) { logout(); }
 }
 
-$$('.sidebar button').forEach(b => b.onclick = () => panel(b.dataset.panel));
-$("#heroDemo")?.addEventListener("click", () => document.getElementById("workspace").scrollIntoView({ behavior: "smooth" }));
+async function loadPatients() {
+  if (!token) return;
+  try {
+    const out = await api("/api/patients");
+    patients = (out.patients || []).map(p => ({ ...p, full_name: fullPatientName(p) }));
+    renderPatientSelects();
+    renderPatients();
+    await refreshDashboard();
+  } catch (e) { console.warn(e.message); }
+}
+function renderPatientSelects() {
+  const opts = `<option value="">Select patient</option>` + patients.map(p => `<option value="${p.id}">${escapeHtml(fullPatientName(p))}</option>`).join("");
+  $$("select.patientSelect").forEach(s => { const v = s.value; s.innerHTML = opts; s.value = v; });
+}
+function renderPatients() {
+  const mount = $("#patientList");
+  if (!mount) return;
+  mount.innerHTML = tableHtml([
+    "Name", "DOB", "MRN", "Diagnosis", "Guardian", "Created", "Modified", "Action"
+  ], patients.map(p => [
+    escapeHtml(fullPatientName(p)), escapeHtml(dateInput(p.date_of_birth)), escapeHtml(p.external_id || ""), escapeHtml(p.diagnosis || ""), escapeHtml(p.guardian_name || ""), fmtDate(p.created_at), p.modified_at ? fmtDate(p.modified_at) : "", `<button class="link-btn" data-open-patient="${p.id}">Open</button>`
+  ]));
+  $$("[data-open-patient]", mount).forEach(b => b.onclick = () => openPatientDetail(b.dataset.openPatient));
+  $$("tbody tr", mount).forEach((tr, i) => tr.ondblclick = () => openPatientDetail(patients[i].id));
+}
+
+async function openPatientDetail(id) {
+  const p = patients.find(x => x.id === id);
+  if (!p) return;
+  activePatient = p;
+  $("#patientDetail").hidden = false;
+  $("#patientDetailTitle").textContent = fullPatientName(p);
+  patientSummary = await api(`/api/patients/${id}/summary`);
+  renderPatientTab("sessions");
+  $("#patientDetail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function renderPatientTab(resource) {
+  $$("#patientTabs button").forEach(b => b.classList.toggle("active", b.dataset.patientTab === resource));
+  const rows = patientSummary?.[resource] || [];
+  const def = resourceDefs[resource];
+  const html = `<div class="subhead"><h3>${def.title}</h3><button class="btn small" data-new-for-patient="${resource}">New ${def.singular}</button></div>` + resourceTable(resource, rows, true);
+  $("#patientTabContent").innerHTML = html;
+  $("[data-new-for-patient]")?.addEventListener("click", () => { panel(resource); renderResourceDetail(resource, { patient_id: activePatient.id, status: "draft" }, true); });
+  $$(`[data-open-resource]`, $("#patientTabContent")).forEach(b => b.onclick = () => { panel(b.dataset.resource); openResourceDetail(b.dataset.resource, b.dataset.id); });
+}
+
+function tableHtml(headers, rows) {
+  return `<table class="data-table"><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(cells => `<tr>${cells.map(c => `<td>${c}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${headers.length}" class="empty">No records yet.</td></tr>`}</tbody></table>`;
+}
+function resourceTable(resource, rows, compact = false) {
+  const def = resourceDefs[resource];
+  const headers = ["Patient", "Status", "Date", "Title / Details", "Created By", "Created Date", "Modified By", "Modified Date", "Action"];
+  const cells = rows.map(r => {
+    const date = r.session_date || r.event_time || r.incident_date || r.created_at;
+    const title = r.title || r.behavior || r.category || r.report_type || r.location || "Record";
+    return [
+      escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(dateInput(date) || fmtDate(date)), escapeHtml(title), escapeHtml(r.created_by_name || r.user_name || ""), fmtDate(r.created_at), escapeHtml(r.modified_by_name || ""), r.modified_at ? fmtDate(r.modified_at) : "", `<button class="link-btn" data-open-resource="${resource}" data-resource="${resource}" data-id="${r.id}">Open</button>${isAdmin() && !compact ? ` <button class="link-btn danger" data-delete-resource="${resource}" data-id="${r.id}">Delete</button>` : ""}`
+    ];
+  });
+  return tableHtml(headers, cells);
+}
+function statusBadge(status = "draft") { return `<span class="status ${String(status).toLowerCase().replaceAll(" ", "-")}">${escapeHtml(status || "Draft")}</span>`; }
+
+async function loadResourceList(resource) {
+  const def = resourceDefs[resource];
+  const mount = $(`#${resource} .resourceMount`);
+  if (!mount) return;
+  mount.innerHTML = `<div class="panel-head"><div><p class="eyebrow">Saved forms</p><h2>${def.title}</h2></div><button class="btn small" data-new-resource="${resource}">New ${def.singular}</button></div><div class="message" id="${resource}Msg"></div><div id="${resource}List" class="table-wrap">Loading...</div><div id="${resource}Detail"></div>`;
+  mount.querySelector("[data-new-resource]").onclick = () => renderResourceDetail(resource, { status: "draft" }, true);
+  try {
+    const out = await api(def.endpoint);
+    const rows = out[def.listKey] || [];
+    mount.querySelector(`#${resource}List`).innerHTML = resourceTable(resource, rows);
+    $$(`[data-open-resource]`, mount).forEach(b => b.onclick = () => openResourceDetail(b.dataset.resource, b.dataset.id));
+    $$(`[data-delete-resource]`, mount).forEach(b => b.onclick = () => deleteResource(b.dataset.deleteResource, b.dataset.id));
+    $$(`tbody tr`, mount.querySelector(`#${resource}List`)).forEach((tr, i) => tr.ondblclick = () => rows[i] && openResourceDetail(resource, rows[i].id));
+  } catch (e) { mount.querySelector(`#${resource}List`).innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+}
+async function openResourceDetail(resource, id) {
+  const def = resourceDefs[resource];
+  try {
+    const out = await api(`${def.endpoint}/${id}`);
+    const item = out[def.singular];
+    item.__history = out.history || [];
+    renderResourceDetail(resource, item, false);
+  } catch (e) { alert(e.message); }
+}
+function fieldHtml(f, item, disabled) {
+  const val = item?.[f.name] ?? "";
+  const attr = `${f.required ? "required" : ""} ${disabled ? "disabled" : ""} ${f.attrs || ""}`;
+  const cls = f.wide ? "span-2" : "";
+  if (f.type === "patient") {
+    return `<label class="${cls}">${escapeHtml(f.label)}<select name="${f.name}" class="patientSelect" ${attr}>${patientOptions(val)}</select></label>`;
+  }
+  if (f.type === "textarea") return `<label class="${cls}">${escapeHtml(f.label)}<textarea name="${f.name}" ${attr}>${escapeHtml(formatJsonish(val))}</textarea></label>`;
+  if (f.type === "select") return `<label class="${cls}">${escapeHtml(f.label)}<select name="${f.name}" ${attr}>${(f.options || []).map(o => `<option value="${escapeHtml(o)}" ${String(val || "").toLowerCase() === o.toLowerCase() ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}</select></label>`;
+  if (f.type === "checkbox") return `<label class="check ${cls}"><input type="checkbox" name="${f.name}" ${val ? "checked" : ""} ${disabled ? "disabled" : ""}> ${escapeHtml(f.label)}</label>`;
+  const v = f.type === "date" ? dateInput(val) : f.type === "datetime-local" ? dtInput(val) : val;
+  return `<label class="${cls}">${escapeHtml(f.label)}<input name="${f.name}" type="${f.type || "text"}" value="${escapeHtml(v)}" ${attr}></label>`;
+}
+function patientOptions(selected = "") {
+  return `<option value="">Select patient</option>` + patients.map(p => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${escapeHtml(fullPatientName(p))}</option>`).join("");
+}
+function formatJsonish(value) {
+  if (value == null) return "";
+  if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+function renderResourceDetail(resource, item = {}, editing = false) {
+  const def = resourceDefs[resource];
+  const detail = $(`#${resource}Detail`) || $(`#${resource} .resourceMount`);
+  if (!detail) return;
+  const isNew = !item.id;
+  const disabled = !editing && !isNew;
+  const title = isNew ? `New ${def.singular}` : `${def.title.slice(0, -1)} detail`;
+  detail.innerHTML = `<section class="detail-card" data-resource="${resource}" data-id="${item.id || ""}">
+    <div class="detail-head"><div><p class="eyebrow">${statusBadge(item.status || "Draft")}</p><h3>${title}</h3></div><div class="detail-actions">${!isNew && disabled ? `<button class="btn small" data-edit="${resource}">Edit</button>` : ""}<button class="btn small secondary" data-back-list="${resource}">Back to list</button></div></div>
+    <div class="voice-tools"><button class="btn small mic" data-voice-resource="${resource}" data-voice-target="${def.voiceField}">Start voice</button><button class="btn small secondary" data-stop-voice hidden>Stop</button><span class="voice-status">Not recording</span></div>
+    <form id="${resource}Form" class="form-card resource-form">
+      <div class="form-grid">${def.fields.map(f => fieldHtml(f, item, disabled)).join("")}</div>
+      <details class="audit-box"><summary>Audit / review details</summary>${auditHtml(item)}</details>
+      <div class="form-actions">
+        ${!disabled ? `<button class="btn" data-save-resource="${resource}">${isNew ? "Save" : "Save changes"}</button><button class="btn secondary" type="button" data-cancel-edit="${resource}">Cancel</button>` : ""}
+        ${!isNew ? `<button class="btn secondary" type="button" data-submit-review="${resource}">Send for Review</button>` : ""}
+        ${!isNew && canActOnReview(item) ? `<button class="btn" type="button" data-approve-review="${resource}">Approve</button><button class="btn secondary danger" type="button" data-reject-review="${resource}">Reject</button>` : ""}
+        ${!isNew && isAdmin() ? `<button class="btn secondary danger" type="button" data-delete-detail="${resource}">Delete</button>` : ""}
+      </div>
+      <div class="review-box" id="${resource}ReviewBox" hidden></div>
+      <div class="message" id="${resource}DetailMsg"></div>
+    </form>
+  </section>`;
+  renderPatientSelects();
+  detail.scrollIntoView({ behavior: "smooth", block: "start" });
+  detail.querySelector(`[data-back-list]`).onclick = () => loadResourceList(resource);
+  detail.querySelector(`[data-edit]`)?.addEventListener("click", () => renderResourceDetail(resource, item, true));
+  detail.querySelector(`[data-cancel-edit]`)?.addEventListener("click", () => isNew ? loadResourceList(resource) : renderResourceDetail(resource, item, false));
+  detail.querySelector(`[data-save-resource]`)?.addEventListener("click", e => { e.preventDefault(); saveResource(resource, item.id); });
+  detail.querySelector(`[data-delete-detail]`)?.addEventListener("click", () => deleteResource(resource, item.id));
+  detail.querySelector(`[data-submit-review]`)?.addEventListener("click", () => showReviewSubmit(resource, item.id));
+  detail.querySelector(`[data-approve-review]`)?.addEventListener("click", () => approveReview(resource, item.id));
+  detail.querySelector(`[data-reject-review]`)?.addEventListener("click", () => rejectReview(resource, item.id));
+  detail.querySelector(`[data-voice-resource]`)?.addEventListener("click", e => { e.preventDefault(); startVoice(resource, def.voiceField, detail); });
+  detail.querySelector(`[data-stop-voice]`)?.addEventListener("click", e => { e.preventDefault(); stopVoice(); });
+}
+function canActOnReview(item) { return item?.status === "Under Review" && (item.review_assigned_to === currentUser?.id || isAdmin()); }
+function auditHtml(item = {}) {
+  const rows = [
+    ["Created By", item.created_by_name || ""], ["Created Date", fmtDate(item.created_at)], ["Modified By", item.modified_by_name || ""], ["Modified Date", item.modified_at ? fmtDate(item.modified_at) : ""], ["Review Assigned To", item.review_assigned_to_name || ""], ["Review Requested At", item.review_requested_at ? fmtDate(item.review_requested_at) : ""], ["Reviewed By", item.reviewed_by_name || ""], ["Reviewed Date", item.reviewed_at ? fmtDate(item.reviewed_at) : ""], ["Rejection Reason", item.rejection_reason || ""]
+  ];
+  const history = (item.__history || []).map(h => `<tr><td>${escapeHtml(h.action)}</td><td>${escapeHtml(h.actor_name || "")}</td><td>${escapeHtml(h.reviewer_name || "")}</td><td>${escapeHtml(h.from_status || "")}</td><td>${escapeHtml(h.to_status || "")}</td><td>${escapeHtml(h.comment || "")}</td><td>${fmtDate(h.created_at)}</td></tr>`).join("");
+  return `<div class="audit-grid">${rows.map(([k,v]) => `<div><strong>${escapeHtml(k)}</strong><span>${escapeHtml(v)}</span></div>`).join("")}</div>${history ? `<h4>Review history</h4><table class="data-table small"><thead><tr><th>Action</th><th>Actor</th><th>Reviewer</th><th>From</th><th>To</th><th>Comment</th><th>Date</th></tr></thead><tbody>${history}</tbody></table>` : ""}`;
+}
+async function saveResource(resource, id) {
+  const def = resourceDefs[resource];
+  const form = $(`#${resource}Form`);
+  const msg = $(`#${resource}DetailMsg`);
+  const body = formToResourceBody(form, def);
+  try {
+    if (resource === "reports" && !body.output && body.prompt && !id) {
+      setMessage(msg, "Drafting report with AI...", "info");
+      const out = await api("/api/ai/session-summary", { method: "POST", body: JSON.stringify({ patient_id: body.patient_id, note: body.prompt }) });
+      setMessage(msg, "Report drafted and saved.", "success");
+      await loadResourceList(resource);
+      await openResourceDetail(resource, out.report.id);
+      return;
+    }
+    const out = await api(id ? `${def.endpoint}/${id}` : def.endpoint, { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
+    const saved = out[def.singular];
+    setMessage(msg, "Saved successfully.", "success");
+    await loadResourceList(resource);
+    if (saved?.id) await openResourceDetail(resource, saved.id);
+  } catch (e) { setMessage(msg, e.message, "error"); }
+}
+function formToResourceBody(form, def) {
+  const body = {};
+  for (const f of def.fields) {
+    const el = form.elements[f.name];
+    if (!el) continue;
+    if (f.type === "checkbox") body[f.name] = el.checked;
+    else body[f.name] = el.value;
+  }
+  body.status = body.status || "draft";
+  return body;
+}
+async function deleteResource(resource, id) {
+  if (!confirm("Delete this record? This is permanent.")) return;
+  try { await api(`${resourceDefs[resource].endpoint}/${id}`, { method: "DELETE" }); await loadResourceList(resource); } catch (e) { alert(e.message); }
+}
+
+async function showReviewSubmit(resource, id) {
+  await loadOrgUsers();
+  const box = $(`#${resource}ReviewBox`);
+  box.hidden = false;
+  box.innerHTML = `<h4>Send for review</h4><label>Reviewer<select id="reviewerSelect"><option value="">Select reviewer</option>${orgUsers.filter(u => u.active).map(u => `<option value="${u.id}">${escapeHtml(u.full_name)} (${escapeHtml(u.role)})</option>`).join("")}</select></label><label>Comment<textarea id="reviewComment" placeholder="Optional note to reviewer"></textarea></label><button class="btn small" type="button" id="submitReviewBtn">Submit for review</button>`;
+  $("#submitReviewBtn").onclick = async () => {
+    try {
+      const out = await api(`/api/review/${resource}/${id}/submit`, { method: "POST", body: JSON.stringify({ reviewer_id: $("#reviewerSelect").value, comment: $("#reviewComment").value }) });
+      alert(out.message || "Sent for review.");
+      await openResourceDetail(resource, id);
+    } catch (e) { alert(e.message); }
+  };
+}
+async function approveReview(resource, id) {
+  const comment = prompt("Approval comment, optional") || "";
+  try { const out = await api(`/api/review/${resource}/${id}/approve`, { method: "POST", body: JSON.stringify({ comment }) }); alert(out.message || "Approved."); await openResourceDetail(resource, id); await loadInbox(); } catch (e) { alert(e.message); }
+}
+async function rejectReview(resource, id) {
+  const comment = prompt("Reason for rejection / changes needed") || "Rejected for changes.";
+  try { const out = await api(`/api/review/${resource}/${id}/reject`, { method: "POST", body: JSON.stringify({ comment }) }); alert(out.message || "Rejected."); await openResourceDetail(resource, id); await loadInbox(); } catch (e) { alert(e.message); }
+}
+
+function startVoice(resource, targetName, root) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return alert("Browser speech recognition is not supported in this browser.");
+  if (activeVoice) stopVoice();
+  const rec = new SpeechRecognition();
+  const target = root.querySelector(`[name="${targetName}"]`);
+  if (!target) return alert("Target field not found.");
+  const startBtn = root.querySelector(`[data-voice-resource]`);
+  const stopBtn = root.querySelector(`[data-stop-voice]`);
+  const status = root.querySelector(".voice-status");
+  rec.lang = "en-US"; rec.interimResults = false; rec.continuous = true;
+  rec.onresult = ev => { for (let i = ev.resultIndex; i < ev.results.length; i++) target.value = `${target.value || ""} ${ev.results[i][0].transcript}`.trim(); };
+  rec.onerror = ev => { if (status) status.textContent = `Speech error: ${ev.error}`; };
+  rec.onend = async () => {
+    if (startBtn) { startBtn.textContent = "Start voice"; startBtn.disabled = false; }
+    if (stopBtn) stopBtn.hidden = true;
+    if (status) status.textContent = "Stopped. Mapping fields...";
+    const text = target.value.trim();
+    activeVoice = null;
+    if (text) await extractFields(resource, text, root);
+    if (status) status.textContent = "Not recording";
+  };
+  activeVoice = rec;
+  if (startBtn) { startBtn.textContent = "Recording..."; startBtn.disabled = true; }
+  if (stopBtn) stopBtn.hidden = false;
+  if (status) status.textContent = "Recording. Click Stop when finished.";
+  rec.start();
+}
+function stopVoice() { if (activeVoice) { try { activeVoice.stop(); } catch {} } }
+async function extractFields(resource, text, root) {
+  try {
+    const out = await api("/api/ai/extract-fields", { method: "POST", body: JSON.stringify({ resource_type: resource, text }) });
+    const fields = out.fields || {};
+    for (const [k, v] of Object.entries(fields)) {
+      const el = root.querySelector(`[name="${k}"]`);
+      if (!el || v == null || v === "") continue;
+      if (el.type === "checkbox") el.checked = Boolean(v);
+      else if (el.type === "datetime-local") el.value = dtInput(v);
+      else if (el.type === "date") el.value = dateInput(v);
+      else if (!el.value || el.tagName === "TEXTAREA") el.value = String(v);
+    }
+  } catch (e) { console.warn(e.message); }
+}
+
+async function loadInbox() {
+  const assigned = $("#assignedInbox"), returned = $("#returnedInbox");
+  if (!assigned || !returned) return;
+  try {
+    const out = await api("/api/inbox");
+    assigned.innerHTML = inboxTable(out.assigned || [], true);
+    returned.innerHTML = inboxTable(out.returned || [], false);
+    $$(`[data-open-inbox]`).forEach(b => b.onclick = () => { panel(b.dataset.resource); openResourceDetail(b.dataset.resource, b.dataset.id); });
+    $("#metricInbox") && ($("#metricInbox").textContent = String((out.assigned || []).length + (out.returned || []).length));
+  } catch (e) { assigned.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+}
+function inboxTable(rows, assigned) {
+  return tableHtml(["Type", "Patient", "Status", "Details", assigned ? "Requested By" : "Reviewer", "Date", "Action"], rows.map(r => [
+    escapeHtml(r.resource_label || r.resource), escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(r.title || r.behavior || r.category || r.report_type || r.location || "Record"), escapeHtml(assigned ? (r.created_by_name || "") : (r.reviewed_by_name || r.review_assigned_to_name || "")), fmtDate(r.review_requested_at || r.modified_at || r.created_at), `<button class="link-btn" data-open-inbox="1" data-resource="${r.resource}" data-id="${r.id}">Open</button>`
+  ]));
+}
+
+async function loadOrgUsers() {
+  if (!isAdmin() && orgUsers.length) return orgUsers;
+  try { const out = await api("/api/admin/users"); orgUsers = out.users || []; return orgUsers; } catch { return orgUsers; }
+}
+async function loadAdmin() {
+  if (!isAdmin()) { $("#admin").innerHTML = `<div class="notice">Admin & Roles is available to Org Admin users only.</div>`; return; }
+  await loadOrgUsers();
+  renderRoleSelects();
+  renderAdminUsers();
+  await loadRoleMatrix();
+}
+function renderRoleSelects() { $$(".roleSelect").forEach(s => s.innerHTML = roles.map(r => `<option value="${r}">${r}</option>`).join("")); }
+function renderAdminUsers() {
+  const mount = $("#adminUserList");
+  if (!mount) return;
+  mount.innerHTML = tableHtml(["Name", "Email", "Role", "Active", "MFA", "Created", "Modified", "Actions"], orgUsers.map(u => [
+    escapeHtml(u.full_name), escapeHtml(u.email), `<select data-user-role="${u.id}">${roles.map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select>`, `<input type="checkbox" data-user-active="${u.id}" ${u.active ? "checked" : ""}>`, u.mfa_enabled ? "Yes" : "No", fmtDate(u.created_at), u.modified_at ? fmtDate(u.modified_at) : "", `<button class="link-btn" data-save-user="${u.id}">Save</button> <button class="link-btn" data-reset-user="${u.id}">Reset Password</button>`
+  ]));
+  $$(`[data-save-user]`, mount).forEach(b => b.onclick = () => saveAdminUser(b.dataset.saveUser));
+  $$(`[data-reset-user]`, mount).forEach(b => b.onclick = () => resetAdminPassword(b.dataset.resetUser));
+}
+async function saveAdminUser(id) {
+  try { await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify({ role: $(`[data-user-role="${id}"]`).value, active: $(`[data-user-active="${id}"]`).checked }) }); await loadAdmin(); } catch (e) { alert(e.message); }
+}
+async function resetAdminPassword(id) {
+  const initialPassword = prompt("Enter temporary password, at least 10 characters");
+  if (!initialPassword) return;
+  try { const out = await api(`/api/admin/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ initialPassword }) }); alert(`Password reset for ${out.user.email}. Temporary password: ${out.temporaryPassword}`); } catch (e) { alert(e.message); }
+}
+async function loadRoleMatrix() {
+  try { const out = await api("/api/admin/role-permissions"); roleMatrix = out; renderRoleMatrix(); } catch (e) { console.warn(e.message); }
+}
+function renderRoleMatrix() {
+  const mount = $("#roleMatrix");
+  if (!mount || !roleMatrix) return;
+  mount.innerHTML = `<table class="data-table matrix"><thead><tr><th>Permission</th>${roleMatrix.roles.map(r => `<th>${r}</th>`).join("")}</tr></thead><tbody>${roleMatrix.permissionKeys.map(k => `<tr><td>${k}</td>${roleMatrix.roles.map(r => `<td><input type="checkbox" data-perm-role="${r}" data-perm-key="${k}" ${roleMatrix.matrix?.[r]?.[k] ? "checked" : ""}></td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+async function saveRoleMatrix() {
+  if (!roleMatrix) return;
+  for (const r of roleMatrix.roles) for (const k of roleMatrix.permissionKeys) roleMatrix.matrix[r][k] = Boolean($(`[data-perm-role="${r}"][data-perm-key="${k}"]`)?.checked);
+  try { await api("/api/admin/role-permissions", { method: "PUT", body: JSON.stringify({ matrix: roleMatrix.matrix }) }); alert("Role permissions saved."); } catch (e) { alert(e.message); }
+}
+
+async function refreshDashboard() {
+  $("#metricPatients") && ($("#metricPatients").textContent = String(patients.length));
+  let drafts = 0, reviews = 0;
+  for (const key of Object.keys(resourceDefs)) {
+    try {
+      const out = await api(resourceDefs[key].endpoint);
+      const rows = out[key] || [];
+      drafts += rows.filter(r => String(r.status).toLowerCase() === "draft").length;
+      reviews += rows.filter(r => String(r.status).toLowerCase() === "under review").length;
+    } catch {}
+  }
+  $("#metricDrafts") && ($("#metricDrafts").textContent = String(drafts));
+  $("#metricReviews") && ($("#metricReviews").textContent = String(reviews));
+}
+
+// Event bindings
+$$(".sidebar button").forEach(b => b.onclick = () => panel(b.dataset.panel));
 $("#openAuth")?.addEventListener("click", () => openAuth("login"));
+$("#heroLogin")?.addEventListener("click", () => openAuth("login"));
 $("#closeAuth")?.addEventListener("click", closeAuth);
 $("#authModal")?.addEventListener("click", e => { if (e.target.id === "authModal") closeAuth(); });
-$$('.auth-tab').forEach(b => b.addEventListener("click", () => setAuthScreen(b.dataset.authScreen)));
+$$(".auth-tab").forEach(b => b.addEventListener("click", () => setAuthScreen(b.dataset.authScreen)));
 $("#goLoginAfterMfa")?.addEventListener("click", () => setAuthScreen("login"));
+$("#logoutBtn")?.addEventListener("click", logout);
+$("#refreshAll")?.addEventListener("click", async () => { await loadPatients(); await refreshDashboard(); });
+$("#refreshInbox")?.addEventListener("click", loadInbox);
+$("#refreshAdmin")?.addEventListener("click", loadAdmin);
+$("#saveRoleMatrix")?.addEventListener("click", saveRoleMatrix);
+$("#closePatientDetail")?.addEventListener("click", () => { $("#patientDetail").hidden = true; activePatient = null; });
+$$("#patientTabs button").forEach(b => b.onclick = () => renderPatientTab(b.dataset.patientTab));
+$$("#adminTabs button").forEach(b => b.onclick = () => { $$("#adminTabs button").forEach(x => x.classList.toggle("active", x === b)); $("#adminUsersTab").hidden = b.dataset.adminTab !== "users"; $("#adminRolesTab").hidden = b.dataset.adminTab !== "roles"; });
+$("#newPatientBtn")?.addEventListener("click", () => { $("#patientForm").hidden = false; $("#patientForm").reset(); });
+$("#cancelPatientBtn")?.addEventListener("click", () => { $("#patientForm").hidden = true; });
 
 let orgSearchTimer;
 $("#orgSearch")?.addEventListener("input", e => {
@@ -138,321 +546,67 @@ $("#orgSearch")?.addEventListener("input", e => {
   $("#organizationId").value = "";
   clearTimeout(orgSearchTimer);
   orgSearchTimer = setTimeout(async () => {
-    if (value.length < 2) {
-      organizationMatches = [];
-      $("#organizationOptions").innerHTML = "";
-      $("#orgHint").textContent = "Type at least 2 characters to search for an existing organization.";
-      return;
-    }
+    if (value.length < 2) { $("#organizationOptions").innerHTML = ""; $("#orgHint").textContent = "Type at least 2 characters to search or create a new organization."; return; }
     try {
       const out = await api(`/api/organizations?q=${encodeURIComponent(value)}`);
       organizationMatches = out.organizations || [];
       $("#organizationOptions").innerHTML = organizationMatches.map(o => `<option value="${escapeHtml(o.name)}"></option>`).join("");
       const exact = organizationMatches.find(o => o.name.toLowerCase() === value.toLowerCase());
-      if (exact) {
-        $("#organizationId").value = exact.id;
-        $("#orgHint").textContent = `Selected existing organization: ${exact.name}. New account requests may require admin approval.`;
-      } else if (organizationMatches.length) {
-        $("#orgHint").textContent = "Select a matching organization from the list, or keep your typed name to create a new organization.";
-      } else {
-        $("#orgHint").textContent = "No existing organization found. This will create a new organization and make you the org admin.";
-      }
-    } catch {
-      $("#orgHint").textContent = "Could not search organizations right now. You can still enter a new organization name.";
-    }
+      if (exact) { $("#organizationId").value = exact.id; $("#orgHint").textContent = `Selected existing organization: ${exact.name}. Admin approval may be required.`; }
+      else $("#orgHint").textContent = organizationMatches.length ? "Select a match or keep typed name to create a new organization." : "No match found. This will create a new organization and make you admin.";
+    } catch { $("#orgHint").textContent = "Could not search organizations right now."; }
   }, 250);
 });
 $("#orgSearch")?.addEventListener("change", e => {
-  const value = e.target.value.trim();
-  const exact = organizationMatches.find(o => o.name.toLowerCase() === value.toLowerCase());
+  const exact = organizationMatches.find(o => o.name.toLowerCase() === e.target.value.trim().toLowerCase());
   $("#organizationId").value = exact ? exact.id : "";
 });
 
-function showMfaSetup(mfaSetup = {}) {
-  const panel = $("#mfaSetupPanel");
-  panel.hidden = false;
-  $("#mfaSecret").textContent = mfaSetup.secret || "";
-  const link = $("#mfaSetupLink");
-  if (link) {
-    link.href = mfaSetup.otpauth_url || "#";
-    link.hidden = !mfaSetup.otpauth_url;
-  }
-  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
-
 $("#registerForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const missing = requiredMissing(e.target);
-  if (missing.length) return setAuthMessage(`Please complete: ${missing.join(", ")}.`, "error");
   const body = formBody(e.target);
   if (!body.organizationId) delete body.organizationId;
   try {
-    setAuthMessage("Creating account and generating MFA setup…", "info");
+    setAuthMessage("Creating account and MFA setup key...", "info");
     const out = await api("/api/register", { method: "POST", body: JSON.stringify(body) });
     token = out.token; localStorage.setItem("ta_token", token);
-    currentUser = out.user; updateAuthState(); showMfaSetup(out.mfaSetup);
-    setAuthMessage(out.message || "Account created. Manually enter the MFA setup key and verify the 6-digit code.", out.status === "pending_approval" ? "warning" : "success");
-  } catch (err) { setAuthMessage(friendlyError(err), "error"); }
+    $("#mfaSetupPanel").hidden = false; $("#mfaSecret").textContent = out.mfaSetup?.secret || "";
+    setAuthMessage(out.message || "Account created. Manually add the MFA setup key in Authenticator, then verify the 6-digit code.", out.status === "pending_approval" ? "warning" : "success");
+  } catch (err) { setAuthMessage(err.message, "error"); }
 });
-
 $("#mfaForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const missing = requiredMissing(e.target);
-  if (missing.length) return setAuthMessage("Enter the 6-digit MFA code from your authenticator app.", "error");
-  try {
-    const out = await api("/api/mfa/enable", { method: "POST", body: JSON.stringify(formBody(e.target)) });
-    token = out.token; localStorage.setItem("ta_token", token); currentUser = out.user; updateAuthState();
-    setAuthMessage(out.message || "MFA enabled. Go to Login to access the workspace.", "success");
-  } catch (err) { setAuthMessage(friendlyError(err), "error"); }
+  try { const out = await api("/api/mfa/enable", { method: "POST", body: JSON.stringify(formBody(e.target)) }); token = out.token; localStorage.setItem("ta_token", token); setAuthMessage(out.message || "MFA enabled. Go to Login.", "success"); }
+  catch (err) { setAuthMessage(err.message, "error"); }
 });
-
 $("#loginForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const missing = requiredMissing(e.target);
-  if (missing.length) return setAuthMessage(`Please complete: ${missing.join(", ")}.`, "error");
   try {
-    setAuthMessage("Checking credentials…", "info");
+    setAuthMessage("Checking credentials...", "info");
     const out = await api("/api/login", { method: "POST", body: JSON.stringify(formBody(e.target)) });
-    token = out.token; localStorage.setItem("ta_token", token); currentUser = out.user; currentPermissions = out.permissions || {};
-    if (out.mfaSetupRequired) {
-      showMfaSetup(out.mfaSetup);
-      setAuthScreen("register");
-      setAuthMessage(out.message, "warning");
-      return;
-    }
-    updateAuthState();
-    setAuthMessage(out.message || `Logged in as ${out.user.email}.`, "success");
-    setTimeout(closeAuth, 650);
-    await refreshPatients();
-    panel("dashboard");
-  } catch (err) { setAuthMessage(friendlyError(err), "error"); }
+    token = out.token; localStorage.setItem("ta_token", token); currentUser = out.user;
+    setAuthMessage(out.message || `Welcome ${out.user.full_name}.`, "success");
+    closeAuth(); setAuthenticatedUI(); await loadPatients(); await refreshDashboard();
+  } catch (err) { setAuthMessage(err.message, "error"); }
 });
-
 $("#forgotForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const missing = requiredMissing(e.target);
-  if (missing.length) return setAuthMessage("Enter your login/email to start password recovery.", "error");
-  try {
-    const out = await api("/api/password/forgot", { method: "POST", body: JSON.stringify(formBody(e.target)) });
-    setAuthMessage(out.message || "If an account exists, reset instructions will be sent.", "success");
-  } catch (err) { setAuthMessage(friendlyError(err), "error"); }
+  try { const out = await api("/api/password/forgot", { method: "POST", body: JSON.stringify(formBody(e.target)) }); setAuthMessage(out.message, "success"); }
+  catch (err) { setAuthMessage(err.message, "error"); }
 });
-
-async function refreshPatients() {
-  if (!token || !currentUser?.mfa_enabled) return;
-  try {
-    const out = await api("/api/patients");
-    patients = out.patients || [];
-    renderPatients();
-  } catch (e) { console.warn(e.message); }
-}
-function renderPatients() {
-  $("#metricPatients") && ($("#metricPatients").textContent = patients.length ? String(patients.length) : "—");
-  $("#patientList") && ($("#patientList").innerHTML = patients.map(p => `<div class="row"><strong>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</strong><span>${escapeHtml(p.diagnosis || "No diagnosis entered")}</span></div>`).join(""));
-  $$(".patientSelect").forEach(sel => {
-    sel.innerHTML = patients.length ? patients.map(p => `<option value="${p.id}">${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</option>`).join("") : `<option value="">No patients loaded</option>`;
-  });
-}
-
-async function extractAndFill(formName, form, text, overwrite = false) {
-  if (!text || !String(text).trim()) return;
-  try {
-    const out = await api("/api/ai/extract-fields", { method: "POST", body: JSON.stringify({ form: formName, text }) });
-    Object.entries(out.fields || {}).forEach(([name, value]) => setField(form, name, value, overwrite));
-    toast(out.message || "Voice note mapped into available fields. Review before saving.");
-  } catch (e) { toast(friendlyError(e), "error"); }
-}
-
-function formRawText(formName, form) {
-  if (formName === "session") return form.progress_notes?.value || "";
-  if (formName === "behavior") return form.notes?.value || "";
-  if (formName === "incident") return form.description?.value || "";
-  if (formName === "plan") return $("#plan_voice")?.value || "";
-  if (formName === "report") return form.note?.value || "";
-  return "";
-}
-
-function getFormByName(formName) {
-  return { session: $("#sessionForm"), behavior: $("#behaviorForm"), incident: $("#incidentForm"), plan: $("#planForm"), report: $("#reportForm") }[formName];
-}
-
-function setVoiceStatus(formName, text, recording = false) {
-  const id = `${formName}VoiceStatus`;
-  const el = document.getElementById(id);
-  if (el) el.textContent = text;
-  const start = $(`.mic[data-form="${formName}"]`);
-  const stop = $(`.stop-mic[data-form="${formName}"]`);
-  if (start) { start.textContent = recording ? "Recording…" : "Start voice"; start.disabled = recording; }
-  if (stop) stop.disabled = !recording;
-}
-
-function startVoice(formName, targetId) {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return alert("Browser speech recognition is not supported in this browser.");
-  if (activeRecognition) activeRecognition.stop();
-  const rec = new SpeechRecognition();
-  const target = document.getElementById(targetId);
-  const original = target.value.trim();
-  let finalText = original;
-  rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
-  rec.onresult = ev => {
-    let interim = "";
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const piece = ev.results[i][0].transcript;
-      if (ev.results[i].isFinal) finalText = `${finalText} ${piece}`.trim(); else interim += piece;
-    }
-    target.value = `${finalText} ${interim}`.trim();
-  };
-  rec.onerror = ev => { setVoiceStatus(formName, `Voice error: ${ev.error || "unknown"}`); };
-  rec.onend = async () => {
-    const stopped = activeRecognition === rec;
-    activeRecognition = null; activeVoice = null; setVoiceStatus(formName, "Recording stopped. Mapping clear facts into fields for review…", false);
-    if (stopped) await extractAndFill(formName, getFormByName(formName), target.value, false);
-  };
-  activeRecognition = rec; activeVoice = { formName, targetId };
-  rec.start();
-  setVoiceStatus(formName, "Recording. Click Stop when finished.", true);
-}
-function stopVoice(formName) { if (activeRecognition && (!formName || activeVoice?.formName === formName)) activeRecognition.stop(); }
-$$('.mic').forEach(b => b.onclick = () => startVoice(b.dataset.form, b.dataset.target));
-$$('.stop-mic').forEach(b => b.onclick = () => stopVoice(b.dataset.form));
-
-function toast(message, type = "success") {
-  const div = document.createElement("div");
-  div.className = `toast ${type}`; div.textContent = message; document.body.appendChild(div);
-  setTimeout(() => div.remove(), 4200);
-}
-
 $("#patientForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  try { await api("/api/patients", { method: "POST", body: JSON.stringify(formBody(e.target)) }); e.target.reset(); await refreshPatients(); toast("Patient added."); }
-  catch (err) { toast(friendlyError(err), "error"); }
+  try { await api("/api/patients", { method: "POST", body: JSON.stringify(formBody(e.target)) }); e.target.reset(); e.target.hidden = true; await loadPatients(); }
+  catch (err) { alert(err.message); }
 });
-
-$("#sessionForm")?.addEventListener("submit", async e => {
+$("#adminAddUserForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const raw = formRawText("session", e.target);
-  if (raw) await extractAndFill("session", e.target, raw, false);
-  try { const out = await api("/api/session-logs", { method: "POST", body: JSON.stringify(formBody(e.target)) }); toast(out.message || "Session log saved."); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-$("#behaviorForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const raw = formRawText("behavior", e.target);
-  if (raw) await extractAndFill("behavior", e.target, raw, false);
-  try { const out = await api("/api/behavior-events", { method: "POST", body: JSON.stringify(formBody(e.target)) }); toast(out.message || "Behavior event saved."); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-$("#incidentForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const raw = formRawText("incident", e.target);
-  if (raw) await extractAndFill("incident", e.target, raw, false);
-  try { const out = await api("/api/incidents", { method: "POST", body: JSON.stringify(formBody(e.target)) }); toast(out.message || "Incident saved."); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-$("#planForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const raw = formRawText("plan", e.target);
-  if (raw) await extractAndFill("plan", e.target, raw, false);
-  const body = formBody(e.target);
-  for (const k of ["goals", "interventions", "restrictions"]) { try { body[k] = body[k] ? JSON.parse(body[k]) : []; } catch { body[k] = []; } }
-  try { const out = await api("/api/therapy-plans", { method: "POST", body: JSON.stringify(body) }); toast(out.message || "Therapy plan saved."); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-$("#reportForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const raw = formRawText("report", e.target);
-  if (raw) await extractAndFill("report", e.target, raw, false);
-  try { const out = await api("/api/ai/session-summary", { method: "POST", body: JSON.stringify(formBody(e.target)) }); $("#reportOutput").textContent = out.output || JSON.stringify(out.report, null, 2); }
-  catch (err) { $("#reportOutput").textContent = friendlyError(err); }
-});
-
-$("#seedDemo")?.addEventListener("click", async () => {
-  if (!token) return openAuth("login");
-  try { await api("/api/patients", { method: "POST", body: JSON.stringify({ first_name: "Demo", last_name: "Client", diagnosis: "ASD support program", guardian_name: "Caregiver" }) }); await refreshPatients(); toast("Demo patient added."); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-$$('.admin-tab').forEach(b => b.addEventListener("click", () => {
-  $$('.admin-tab').forEach(x => x.classList.toggle("active", x === b));
-  $$('.admin-panel').forEach(p => p.classList.toggle("active", p.id === `admin-${b.dataset.adminTab}`));
-}));
-
-async function loadAdmin() {
-  if (!currentUser?.mfa_enabled || currentUser.role !== "org_admin") { $("#adminNotice").textContent = "Only org admins can manage users and roles."; return; }
-  $("#adminNotice").textContent = "Manage users, activation, password reset, roles, and role permissions for this organization.";
-  await Promise.all([loadUsers(), loadRolePermissions()]);
-}
-
-async function loadUsers() {
-  try {
-    const out = await api("/api/admin/users");
-    $("#userRows").innerHTML = (out.users || []).map(u => `
-      <tr data-user-id="${u.id}">
-        <td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.email)}</td>
-        <td><select class="roleSelect">${["org_admin","bcba","supervisor","therapist","rbt","billing_auditor","read_only"].map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
-        <td>${u.mfa_enabled ? "Enabled" : "Not enrolled"}</td><td>${u.active ? "Active" : "Inactive"}</td>
-        <td><button class="btn small saveUser" type="button">Save</button> <button class="btn small secondary toggleUser" type="button">${u.active ? "Deactivate" : "Activate"}</button> <button class="btn small secondary resetUser" type="button">Reset password</button></td>
-      </tr>`).join("");
-  } catch (e) { toast(friendlyError(e), "error"); }
-}
-
-$("#adminUserForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const missing = requiredMissing(e.target);
-  if (missing.length) return toast(`Please complete: ${missing.join(", ")}.`, "error");
   try {
     const out = await api("/api/admin/users", { method: "POST", body: JSON.stringify(formBody(e.target)) });
-    e.target.reset(); await loadUsers();
-    const inv = out.invite || {};
     $("#inviteOutput").hidden = false;
-    $("#inviteOutput").innerHTML = `<strong>Invite generated for ${escapeHtml(inv.email || "user")}</strong><br>Temporary password: <code>${escapeHtml(inv.temporaryPassword || "")}</code><br>MFA setup key: <code>${escapeHtml(inv.mfaSetup?.secret || "")}</code><br>${escapeHtml(inv.message || "")}`;
-  } catch (err) { toast(friendlyError(err), "error"); }
+    $("#inviteOutput").textContent = `User created. Share through approved secure channel. Login: ${out.invite.email}; Temp password: ${out.invite.initialPassword}; MFA setup key: ${out.invite.mfaSetupKey}`;
+    e.target.reset(); await loadAdmin();
+  } catch (err) { alert(err.message); }
 });
 
-$("#userRows")?.addEventListener("click", async e => {
-  const tr = e.target.closest("tr[data-user-id]"); if (!tr) return;
-  const id = tr.dataset.userId;
-  try {
-    if (e.target.classList.contains("saveUser")) {
-      const role = tr.querySelector(".roleSelect").value;
-      await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify({ role }) });
-      toast("User role updated."); await loadUsers();
-    }
-    if (e.target.classList.contains("toggleUser")) {
-      const active = e.target.textContent.trim() === "Activate";
-      await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify({ active }) });
-      toast(active ? "User activated." : "User deactivated."); await loadUsers();
-    }
-    if (e.target.classList.contains("resetUser")) {
-      const out = await api(`/api/admin/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({}) });
-      $("#inviteOutput").hidden = false;
-      $("#inviteOutput").innerHTML = `<strong>Password reset for ${escapeHtml(out.user.email)}</strong><br>Temporary password: <code>${escapeHtml(out.temporaryPassword)}</code><br>MFA setup key: <code>${escapeHtml(out.mfaSetup?.secret || "")}</code><br>${escapeHtml(out.message || "")}`;
-    }
-  } catch (err) { toast(friendlyError(err), "error"); }
-});
-
-async function loadRolePermissions() {
-  try {
-    const out = await api("/api/admin/role-permissions");
-    rolePermissions = out.permissions || {};
-    renderRoleMatrix();
-  } catch (e) { toast(friendlyError(e), "error"); }
-}
-function renderRoleMatrix() {
-  const roles = Object.keys(rolePermissions);
-  $("#roleMatrix").innerHTML = `<div class="role-picker">${roles.map(r => `<button class="role-pick ${r === selectedRole ? "active" : ""}" data-role="${r}" type="button">${r}</button>`).join("")}</div><div class="perm-grid">${Object.entries(PERMISSION_LABELS).map(([key, label]) => `<label><input type="checkbox" data-perm="${key}" ${rolePermissions[selectedRole]?.[key] ? "checked" : ""}> ${label}</label>`).join("")}</div>`;
-}
-$("#roleMatrix")?.addEventListener("click", e => { const b = e.target.closest(".role-pick"); if (b) { selectedRole = b.dataset.role; renderRoleMatrix(); } });
-$("#saveRolePermissions")?.addEventListener("click", async () => {
-  const permissions = {};
-  $$("#roleMatrix [data-perm]").forEach(cb => permissions[cb.dataset.perm] = cb.checked);
-  try { const out = await api("/api/admin/role-permissions", { method: "PUT", body: JSON.stringify({ role: selectedRole, permissions }) }); rolePermissions = out.permissions || rolePermissions; toast(out.message || "Role permissions saved."); renderRoleMatrix(); }
-  catch (err) { toast(friendlyError(err), "error"); }
-});
-
-loadMe();
+initAuth();

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TherapyAgent | AI Therapy Documentation Workspace</title>
+  <title>TherapyAgent | Clinical Workspace</title>
   <meta name="description" content="AI-assisted therapy documentation workspace for ABA and I/DD service organizations.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,294 +16,145 @@
       <div class="mark">TA</div>
       <div>
         <strong>TherapyAgent</strong>
-        <span>AI documentation for ABA & I/DD providers</span>
+        <span>Clinical documentation workspace</span>
       </div>
     </div>
-    <nav id="mainNav">
-      <a class="marketing-link" href="#workspace">Workspace</a>
-      <a class="marketing-link" href="#agents">Agents</a>
-      <a class="marketing-link" href="#compliance">Compliance</a>
-      <div id="authArea">
-        <button id="openAuth" class="btn small" type="button">Login</button>
-      </div>
+    <nav id="publicNav">
+      <a href="#workspace">Workspace</a>
+      <a href="#security">Security</a>
+      <button id="openAuth" class="btn small">Login</button>
     </nav>
+    <div id="userNav" class="user-nav" hidden>
+      <span id="welcomeUser">Welcome</span>
+      <button id="logoutBtn" class="btn small secondary">Logoff</button>
+    </div>
   </header>
 
   <main>
-    <section class="hero marketing-section">
+    <section class="hero public-section">
       <div class="hero-copy">
-        <div class="pill">Voice-first • Multi-tenant • Role-secured</div>
-        <h1>Turn therapy conversations into structured session notes, behavior logs, plans, and reports.</h1>
-        <p>TherapyAgent helps BCBAs, supervisors, therapists, and RBTs capture the right information while the work is happening, then uses AI agents to draft documentation for clinician review.</p>
-        <div class="hero-actions">
-          <button class="btn" id="heroDemo" type="button">Open workspace</button>
-          <a class="btn secondary" href="#compliance">Review security model</a>
-        </div>
+        <div class="pill">Voice-first • Multi-tenant • Review workflow</div>
+        <h1>Turn therapy conversations into structured records.</h1>
+        <p>Capture sessions, behavior events, plans, incidents, and reports with role-based review, status tracking, and full audit context.</p>
+        <div class="hero-actions"><button class="btn" id="heroLogin">Login to workspace</button></div>
       </div>
-      <div class="hero-card">
-        <div class="voice-head"><span class="pulse"></span><strong>Voice capture</strong><em>Browser speech mode</em></div>
-        <p class="quote">“Client completed matching task with verbal prompts. Two elopement attempts during transition. Used visual schedule and differential reinforcement…”</p>
-        <div class="mapped"><span>Session note</span><span>Behavior ABC</span><span>Progress report</span></div>
-      </div>
+      <div class="hero-card"><strong>Review workflow</strong><p>Draft → Under Review → Reviewed or Rejected → Resubmitted</p></div>
     </section>
 
     <section class="workspace" id="workspace">
       <aside class="sidebar">
         <h3>Workspace</h3>
-        <button data-panel="dashboard" class="active" type="button">Dashboard</button>
-        <button data-panel="patients" type="button">Patients</button>
-        <button data-panel="session" type="button">Session Log</button>
-        <button data-panel="behavior" type="button">Behavior Event</button>
-        <button data-panel="incident" type="button">Incident</button>
-        <button data-panel="plan" type="button">Therapy Plan</button>
-        <button data-panel="reports" type="button">AI Reports</button>
-        <button data-panel="admin" type="button">Admin & Roles</button>
+        <button data-panel="dashboard" class="active">Dashboard</button>
+        <button data-panel="patients">Patients</button>
+        <button data-panel="inbox">Inbox</button>
+        <button data-panel="sessions">Session Log</button>
+        <button data-panel="behaviors">Behavior Events</button>
+        <button data-panel="plans">Therapy Plans</button>
+        <button data-panel="incidents">Incidents</button>
+        <button data-panel="reports">AI Reports</button>
+        <button data-panel="admin">Admin & Roles</button>
       </aside>
 
       <section class="panel active" id="dashboard">
-        <div class="panel-head">
-          <div><p class="eyebrow">Today</p><h2>Clinical documentation command center</h2></div>
-          <button class="btn small" id="seedDemo" type="button">Seed demo data</button>
-        </div>
-        <div id="workspaceWelcome" class="notice">Login to load your organization workspace.</div>
+        <div class="panel-head"><div><p class="eyebrow">Today</p><h2>Workspace dashboard</h2></div><button class="btn small" id="refreshAll">Refresh</button></div>
         <div class="metric-grid">
-          <div class="metric"><span id="metricPatients">—</span><label>Patients loaded</label></div>
-          <div class="metric"><span>Draft</span><label>Session notes</label></div>
-          <div class="metric"><span>MFA</span><label>Required for PHI</label></div>
-          <div class="metric"><span>100%</span><label>Audit trail coverage</label></div>
+          <div class="metric"><span id="metricPatients">0</span><label>Patients</label></div>
+          <div class="metric"><span id="metricInbox">0</span><label>Inbox items</label></div>
+          <div class="metric"><span id="metricDrafts">0</span><label>Draft records</label></div>
+          <div class="metric"><span id="metricReviews">0</span><label>Under review</label></div>
         </div>
-        <div class="cards">
-          <article><h3>Session documentation agent</h3><p>Dictate the encounter, stop recording, and review the fields before saving.</p></article>
-          <article><h3>BCBA review queue</h3><p>AI drafts are never final records until reviewed and signed by an authorized clinician.</p></article>
-          <article><h3>Organization isolation</h3><p>Every patient, plan, note, and audit event is scoped to one organization.</p></article>
-        </div>
+        <div class="notice">Open any page on the left. Lists show saved items; double-click a row or click Open to view/edit. New creates a fresh form.</div>
       </section>
 
       <section class="panel" id="patients">
-        <div class="panel-head"><div><p class="eyebrow">Patient records</p><h2>HIPAA-conscious patient registry</h2></div></div>
-        <form id="patientForm" class="form-grid">
-          <input name="first_name" placeholder="First name" required>
-          <input name="last_name" placeholder="Last name" required>
-          <input name="date_of_birth" placeholder="DOB" type="date">
-          <input name="external_id" placeholder="MRN / external ID">
-          <input name="guardian_name" placeholder="Guardian name">
-          <input name="diagnosis" placeholder="Diagnosis / program">
-          <button class="btn" type="submit">Add patient</button>
+        <div class="panel-head"><div><p class="eyebrow">Patient records</p><h2>Patients</h2></div><button class="btn small" id="newPatientBtn">New patient</button></div>
+        <form id="patientForm" class="form-card" hidden>
+          <div class="form-grid">
+            <label>First name<input name="first_name" required></label>
+            <label>Last name<input name="last_name" required></label>
+            <label>Date of birth<input name="date_of_birth" type="date"></label>
+            <label>MRN / External ID<input name="external_id"></label>
+            <label>Guardian name<input name="guardian_name"></label>
+            <label>Guardian phone<input name="guardian_phone"></label>
+            <label>Guardian email<input name="guardian_email" type="email"></label>
+            <label>Diagnosis / Program<input name="diagnosis"></label>
+            <label class="span-2">Insurance<textarea name="insurance"></textarea></label>
+          </div>
+          <div class="form-actions"><button class="btn">Save patient</button><button class="btn secondary" type="button" id="cancelPatientBtn">Cancel</button></div>
         </form>
-        <div id="patientList" class="list"></div>
+        <div id="patientList" class="table-wrap"></div>
+        <section id="patientDetail" class="detail-panel" hidden>
+          <div class="panel-head"><div><p class="eyebrow">Patient detail</p><h2 id="patientDetailTitle">Patient</h2></div><button class="btn small secondary" id="closePatientDetail">Back to patients</button></div>
+          <div class="tabs" id="patientTabs">
+            <button data-patient-tab="sessions" class="active">Sessions</button>
+            <button data-patient-tab="behaviors">Behaviors</button>
+            <button data-patient-tab="plans">Plans</button>
+            <button data-patient-tab="reports">Reports</button>
+            <button data-patient-tab="incidents">Incidents</button>
+          </div>
+          <div id="patientTabContent" class="table-wrap"></div>
+        </section>
       </section>
 
-      <section class="panel" id="session">
-        <div class="panel-head">
-          <div><p class="eyebrow">Voice-assisted form</p><h2>Session / activity log</h2></div>
-          <div class="voice-controls">
-            <button class="btn small mic" data-form="session" data-target="progress_notes" type="button">Start voice</button>
-            <button class="btn small secondary stop-mic" data-form="session" type="button" disabled>Stop</button>
-          </div>
-        </div>
-        <div class="notice small-note" id="sessionVoiceStatus">Record the session note, then stop recording. The app will map clear facts into the fields below for review.</div>
-        <form id="sessionForm" class="form-grid long">
-          <select name="patient_id" class="patientSelect" required></select>
-          <input name="session_date" type="date">
-          <input name="start_time" type="time">
-          <input name="end_time" type="time">
-          <input name="location" placeholder="Location">
-          <input name="service_code" placeholder="Service code">
-          <textarea name="activities" placeholder="Activities performed"></textarea>
-          <textarea name="interventions_used" placeholder="Interventions used"></textarea>
-          <textarea name="response_to_intervention" placeholder="Response to intervention"></textarea>
-          <textarea name="progress_notes" id="progress_notes" placeholder="Voice or type raw session note"></textarea>
-          <button class="btn" type="submit">Save session log</button>
-        </form>
+      <section class="panel" id="inbox">
+        <div class="panel-head"><div><p class="eyebrow">Review workflow</p><h2>Inbox</h2></div><button class="btn small" id="refreshInbox">Refresh inbox</button></div>
+        <h3>Pending my review</h3><div id="assignedInbox" class="table-wrap"></div>
+        <h3>Returned to me</h3><div id="returnedInbox" class="table-wrap"></div>
       </section>
 
-      <section class="panel" id="behavior">
-        <div class="panel-head">
-          <div><p class="eyebrow">ABC data</p><h2>Behavior event log</h2></div>
-          <div class="voice-controls">
-            <button class="btn small mic" data-form="behavior" data-target="behavior_voice" type="button">Start voice</button>
-            <button class="btn small secondary stop-mic" data-form="behavior" type="button" disabled>Stop</button>
-          </div>
-        </div>
-        <div class="notice small-note" id="behaviorVoiceStatus">Dictate antecedent, behavior, consequence, intensity, duration, location, and staff response.</div>
-        <form id="behaviorForm" class="form-grid long">
-          <select name="patient_id" class="patientSelect" required></select>
-          <input name="location" placeholder="Location">
-          <input name="intensity" type="number" min="1" max="5" placeholder="Intensity 1-5">
-          <input name="duration_seconds" type="number" placeholder="Duration seconds">
-          <textarea name="antecedent" placeholder="Antecedent"></textarea>
-          <textarea name="behavior" placeholder="Behavior observed" required></textarea>
-          <textarea name="consequence" placeholder="Consequence"></textarea>
-          <textarea name="suspected_function" placeholder="Suspected function"></textarea>
-          <textarea name="deescalation" placeholder="De-escalation / response"></textarea>
-          <textarea id="behavior_voice" name="notes" placeholder="Voice or type additional notes"></textarea>
-          <button class="btn" type="submit">Save behavior event</button>
-        </form>
-      </section>
-
-      <section class="panel" id="incident">
-        <div class="panel-head">
-          <div><p class="eyebrow">Incident documentation</p><h2>Incident report</h2></div>
-          <div class="voice-controls">
-            <button class="btn small mic" data-form="incident" data-target="incident_description" type="button">Start voice</button>
-            <button class="btn small secondary stop-mic" data-form="incident" type="button" disabled>Stop</button>
-          </div>
-        </div>
-        <form id="incidentForm" class="form-grid long">
-          <select name="patient_id" class="patientSelect" required></select>
-          <input name="incident_date" type="datetime-local">
-          <input name="category" placeholder="Category, e.g. injury, elopement, medication">
-          <select name="severity"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-          <textarea id="incident_description" name="description" placeholder="Incident description" required></textarea>
-          <textarea name="immediate_actions" placeholder="Immediate actions taken"></textarea>
-          <textarea name="notifications" placeholder="Notifications / guardian / supervisor"></textarea>
-          <button class="btn" type="submit">Save incident</button>
-        </form>
-      </section>
-
-      <section class="panel" id="plan">
-        <div class="panel-head">
-          <div><p class="eyebrow">BCBA owned</p><h2>Therapy / behavior support plan</h2></div>
-          <div class="voice-controls">
-            <button class="btn small mic" data-form="plan" data-target="plan_voice" type="button">Start voice</button>
-            <button class="btn small secondary stop-mic" data-form="plan" type="button" disabled>Stop</button>
-          </div>
-        </div>
-        <form id="planForm" class="form-grid long">
-          <select name="patient_id" class="patientSelect" required></select>
-          <input name="title" placeholder="Plan title">
-          <input name="plan_type" placeholder="Plan type" value="behavior_support">
-          <textarea id="plan_voice" placeholder="Dictate plan guidance here before mapping"></textarea>
-          <textarea name="goals" placeholder='Goals JSON, e.g. [{"name":"Transitions","measure":"80% independence"}]'></textarea>
-          <textarea name="interventions" placeholder='Interventions JSON'></textarea>
-          <textarea name="restrictions" placeholder='Restrictions / contraindications JSON'></textarea>
-          <button class="btn" type="submit">Save therapy plan</button>
-        </form>
-      </section>
-
-      <section class="panel" id="reports">
-        <div class="panel-head">
-          <div><p class="eyebrow">AI drafting</p><h2>Generate review-ready report</h2></div>
-          <div class="voice-controls">
-            <button class="btn small mic" data-form="report" data-target="report_note" type="button">Start voice</button>
-            <button class="btn small secondary stop-mic" data-form="report" type="button" disabled>Stop</button>
-          </div>
-        </div>
-        <div class="notice">AI output is a draft. A qualified clinician must review, edit, and sign before use in care, billing, or compliance records.</div>
-        <form id="reportForm" class="form-grid long">
-          <select name="patient_id" class="patientSelect" required></select>
-          <textarea id="report_note" name="note" placeholder="Paste or dictate raw notes to summarize"></textarea>
-          <button class="btn" type="submit">Draft session summary</button>
-        </form>
-        <pre id="reportOutput" class="output"></pre>
-      </section>
+      <section class="panel resource-panel" id="sessions" data-resource="sessions"><div class="resourceMount"></div></section>
+      <section class="panel resource-panel" id="behaviors" data-resource="behaviors"><div class="resourceMount"></div></section>
+      <section class="panel resource-panel" id="plans" data-resource="plans"><div class="resourceMount"></div></section>
+      <section class="panel resource-panel" id="incidents" data-resource="incidents"><div class="resourceMount"></div></section>
+      <section class="panel resource-panel" id="reports" data-resource="reports"><div class="resourceMount"></div></section>
 
       <section class="panel" id="admin">
-        <div class="panel-head"><div><p class="eyebrow">Access control</p><h2>Admin, users, roles, and permissions</h2></div></div>
-        <div id="adminNotice" class="notice">Only org admins can manage users and roles.</div>
-        <div class="admin-tabs">
-          <button class="admin-tab active" data-admin-tab="users" type="button">Users</button>
-          <button class="admin-tab" data-admin-tab="roles" type="button">Role permissions</button>
+        <div class="panel-head"><div><p class="eyebrow">Administration</p><h2>Users, roles, permissions</h2></div><button class="btn small" id="refreshAdmin">Refresh admin</button></div>
+        <div class="tabs" id="adminTabs">
+          <button data-admin-tab="users" class="active">Users</button>
+          <button data-admin-tab="roles">Role permissions</button>
         </div>
-        <section class="admin-panel active" id="admin-users">
-          <form id="adminUserForm" class="form-grid admin-form">
-            <input name="firstName" placeholder="First name" required>
-            <input name="lastName" placeholder="Last name" required>
-            <input name="email" type="email" placeholder="Email / login ID" required>
-            <input name="initialPassword" placeholder="Initial password, optional">
-            <select name="role">
-              <option value="rbt">RBT</option><option value="therapist">Therapist</option><option value="supervisor">Supervisor</option><option value="bcba">BCBA</option><option value="billing_auditor">Billing Auditor</option><option value="read_only">Read Only</option><option value="org_admin">Org Admin</option>
-            </select>
-            <button class="btn" type="submit">Add user / generate invite</button>
+        <div id="adminUsersTab">
+          <form id="adminAddUserForm" class="form-card">
+            <h3>Add user / invite</h3>
+            <div class="form-grid">
+              <label>First name<input name="firstName" required></label>
+              <label>Last name<input name="lastName" required></label>
+              <label>Email / Login<input name="email" type="email" required></label>
+              <label>Initial password<input name="initialPassword" required></label>
+              <label>Role<select name="role" class="roleSelect"></select></label>
+            </div>
+            <div class="form-actions"><button class="btn">Create user</button></div>
+            <div id="inviteOutput" class="notice" hidden></div>
           </form>
-          <div id="inviteOutput" class="notice invite" hidden></div>
-          <div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>MFA</th><th>Status</th><th>Actions</th></tr></thead><tbody id="userRows"></tbody></table></div>
-        </section>
-        <section class="admin-panel" id="admin-roles">
-          <div id="roleMatrix" class="role-matrix"></div>
-          <button id="saveRolePermissions" class="btn" type="button">Save selected role permissions</button>
-        </section>
+          <div id="adminUserList" class="table-wrap"></div>
+        </div>
+        <div id="adminRolesTab" hidden>
+          <div class="notice">Check permissions by role. MVP enforcement still primarily uses role-level controls in the API, but this matrix is stored for the admin model and future fine-grained checks.</div>
+          <div id="roleMatrix" class="matrix-wrap"></div>
+          <div class="form-actions"><button class="btn" id="saveRoleMatrix">Save role permissions</button></div>
+        </div>
       </section>
     </section>
 
-    <section class="agents marketing-section" id="agents">
-      <p class="eyebrow">AI agent suite</p>
-      <h2>Many agents, one governed clinical workflow.</h2>
-      <div class="agent-grid">
-        <article><span>01</span><h3>Voice Intake Agent</h3><p>Captures spoken notes and places facts into the right form fields.</p></article>
-        <article><span>02</span><h3>Session Note Agent</h3><p>Drafts structured therapy notes from raw staff entries for review.</p></article>
-        <article><span>03</span><h3>Behavior ABC Agent</h3><p>Extracts antecedent, behavior, consequence, intensity, duration, location, and suspected function.</p></article>
-        <article><span>04</span><h3>Plan Assistant</h3><p>Turns BCBA guidance into draft goals, interventions, measurement criteria, and review reminders.</p></article>
-        <article><span>05</span><h3>QA & Compliance Agent</h3><p>Flags missing signatures, late notes, gaps in required fields, and inconsistent billing support.</p></article>
-        <article><span>06</span><h3>Report Writer</h3><p>Drafts monthly progress, incident summaries, and caregiver/provider reports with source traceability.</p></article>
-      </div>
-    </section>
-
-    <section class="compliance marketing-section" id="compliance">
-      <p class="eyebrow">Compliance posture</p>
-      <h2>Built for HIPAA-conscious operations, not casual note-taking.</h2>
-      <div class="compliance-grid">
-        <div><strong>MFA required</strong><span>All users accessing PHI must enable MFA before production access.</span></div>
-        <div><strong>Tenant isolation</strong><span>Every query is scoped by organization ID and role.</span></div>
-        <div><strong>Audit logging</strong><span>Patient access, note creation, AI draft generation, and admin actions are logged.</span></div>
-        <div><strong>Minimum necessary</strong><span>Roles expose only the records and workflows required for the user’s job.</span></div>
-        <div><strong>AI safety gate</strong><span>PHI is not sent to an external LLM unless a BAA/Healthcare Addendum is signed and explicitly enabled.</span></div>
-        <div><strong>Human approval</strong><span>AI drafts are never final clinical records until reviewed and signed by an authorized clinician.</span></div>
-      </div>
+    <section class="compliance public-section" id="security">
+      <p class="eyebrow">Security posture</p>
+      <h2>MFA, audit logging, org isolation, review controls.</h2>
+      <div class="compliance-grid"><div><strong>Workflow</strong><span>Draft records can be sent to another user for review and approval.</span></div><div><strong>Audit</strong><span>Created, modified, reviewed, and rejected metadata stay visible.</span></div></div>
     </section>
   </main>
 
   <div class="modal" id="authModal" aria-hidden="true">
     <div class="modal-card auth-card">
-      <button class="x" id="closeAuth" aria-label="Close authentication dialog" type="button">×</button>
+      <button class="x" id="closeAuth" aria-label="Close authentication dialog">×</button>
       <div class="auth-layout">
-        <aside class="auth-side">
-          <p class="eyebrow">Secure access</p>
-          <h2>Sign in, create an account, or recover access.</h2>
-          <p>Every user must enroll MFA before accessing patient records. Organization admins control roles and patient access.</p>
-          <div class="auth-steps"><span>1. Create account</span><span>2. Enter MFA setup key</span><span>3. Verify code</span><span>4. Return to login</span></div>
-        </aside>
+        <aside class="auth-side"><p class="eyebrow">Secure access</p><h2>Login or create account.</h2><p>Every user must enroll MFA before accessing patient records.</p></aside>
         <section class="auth-main">
-          <div class="auth-tabs" role="tablist">
-            <button class="auth-tab active" data-auth-screen="login" type="button">Login</button>
-            <button class="auth-tab" data-auth-screen="register" type="button">Create Account</button>
-            <button class="auth-tab" data-auth-screen="forgot" type="button">Forgot Password</button>
-          </div>
+          <div class="auth-tabs" role="tablist"><button class="auth-tab active" data-auth-screen="login" type="button">Login</button><button class="auth-tab" data-auth-screen="register" type="button">Create Account</button><button class="auth-tab" data-auth-screen="forgot" type="button">Forgot Password</button></div>
           <div id="authMessage" class="auth-message" aria-live="polite"></div>
-          <section class="auth-screen active" id="auth-login">
-            <h3>Login</h3>
-            <p class="auth-help">Use your email, password, and 6-digit code. If MFA is not enrolled yet, the app will show your setup key.</p>
-            <form id="loginForm" class="auth-form">
-              <label>Email / login ID<input name="email" type="email" required></label>
-              <label>Password<input name="password" type="password" required></label>
-              <label>MFA code<input name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code"></label>
-              <button class="btn" type="submit">Login</button>
-            </form>
-          </section>
-          <section class="auth-screen" id="auth-register">
-            <h3>Create Account</h3>
-            <form id="registerForm" class="auth-form">
-              <label>Organization<input id="orgSearch" name="organizationName" list="organizationOptions" placeholder="Start typing organization name" required></label>
-              <datalist id="organizationOptions"></datalist><input id="organizationId" name="organizationId" type="hidden"><p id="orgHint" class="hint">Type at least 2 characters to search for an existing organization.</p>
-              <label>First name<input name="firstName" required></label>
-              <label>Last name<input name="lastName" required></label>
-              <label>Email / login ID<input name="email" type="email" required></label>
-              <label>Password<input name="password" type="password" minlength="10" required></label>
-              <button class="btn" type="submit">Create account</button>
-            </form>
-            <div id="mfaSetupPanel" class="mfa-panel" hidden>
-              <h4>MFA setup</h4>
-              <p>Open Google Authenticator, Microsoft Authenticator, or Authy. Choose manual setup and enter this key.</p>
-              <code id="mfaSecret"></code>
-              <a id="mfaSetupLink" class="setup-link" href="#" target="_blank" rel="noreferrer">Open authenticator setup link</a>
-              <form id="mfaForm" class="auth-form inline-form"><label>6-digit code<input name="totp" inputmode="numeric" required></label><button class="btn" type="submit">Verify MFA</button></form>
-              <button class="btn secondary" id="goLoginAfterMfa" type="button">Go to Login</button>
-            </div>
-          </section>
-          <section class="auth-screen" id="auth-forgot">
-            <h3>Forgot Password</h3>
-            <form id="forgotForm" class="auth-form"><label>Email / login ID<input name="email" type="email" required></label><button class="btn" type="submit">Send reset instructions</button></form>
-          </section>
+          <section class="auth-screen active" id="auth-login"><h3>Login</h3><form id="loginForm" class="auth-form"><label>Email / Login<input name="email" type="email" required autocomplete="email"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><label>MFA code<input name="totp" inputmode="numeric" placeholder="6-digit code"></label><button class="btn">Login</button></form></section>
+          <section class="auth-screen" id="auth-register"><h3>Create Account</h3><form id="registerForm" class="auth-form"><label>Organization<input id="orgSearch" name="organizationName" list="organizationOptions" required autocomplete="organization"><input id="organizationId" name="organizationId" type="hidden"><datalist id="organizationOptions"></datalist><small id="orgHint">Type at least 2 characters to search or create a new organization.</small></label><div class="two"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label></div><label>Email / Login<input name="email" type="email" required></label><label>Password<input name="password" type="password" required minlength="10"></label><button class="btn">Create account</button></form><div id="mfaSetupPanel" class="mfa-panel" hidden><h4>Enable MFA</h4><p>Add account manually in your Authenticator app using this setup key:</p><code id="mfaSecret"></code><form id="mfaForm" class="auth-form"><label>6-digit MFA code<input name="totp" required inputmode="numeric"></label><button class="btn">Verify MFA</button><button class="btn secondary" type="button" id="goLoginAfterMfa">Go to Login</button></form></div></section>
+          <section class="auth-screen" id="auth-forgot"><h3>Forgot Password</h3><form id="forgotForm" class="auth-form"><label>Email / Login<input name="email" type="email" required></label><button class="btn">Request reset</button></form></section>
         </section>
       </div>
     </div>

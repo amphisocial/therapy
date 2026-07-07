@@ -1,7 +1,7 @@
 {
   "name": "therapyagent",
-  "version": "0.1.0",
-  "description": "AI-assisted therapy documentation platform prototype for ABA/I-DD service providers",
+  "version": "0.2.0",
+  "description": "AI-assisted therapy documentation workspace with multi-tenant review workflow",
   "type": "module",
   "main": "server.js",
   "scripts": {

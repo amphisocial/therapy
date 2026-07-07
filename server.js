@@ -14,7 +14,6 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import crypto from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
@@ -23,45 +22,6 @@ const PORT = Number(process.env.PORT || 3060);
 const SITE_ORIGIN = process.env.SITE_ORIGIN || "https://therapyagent.athenabot.ai";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-me";
 const ALLOW_PHI_TO_LLM = String(process.env.ALLOW_PHI_TO_LLM || "false").toLowerCase() === "true";
-const ROLES = ["org_admin", "bcba", "supervisor", "therapist", "rbt", "billing_auditor", "read_only"];
-
-const DEFAULT_PERMISSIONS = {
-  org_admin: {
-    view_patients: true, edit_patients: true, record_sessions: true, record_behavior_events: true,
-    create_therapy_plans: true, approve_plans: true, create_incidents: true, generate_reports: true,
-    sign_records: true, manage_users: true, manage_roles: true, view_audit: true
-  },
-  bcba: {
-    view_patients: true, edit_patients: true, record_sessions: true, record_behavior_events: true,
-    create_therapy_plans: true, approve_plans: true, create_incidents: true, generate_reports: true,
-    sign_records: true, manage_users: false, manage_roles: false, view_audit: false
-  },
-  supervisor: {
-    view_patients: true, edit_patients: true, record_sessions: true, record_behavior_events: true,
-    create_therapy_plans: true, approve_plans: false, create_incidents: true, generate_reports: true,
-    sign_records: false, manage_users: false, manage_roles: false, view_audit: false
-  },
-  therapist: {
-    view_patients: true, edit_patients: false, record_sessions: true, record_behavior_events: true,
-    create_therapy_plans: false, approve_plans: false, create_incidents: true, generate_reports: true,
-    sign_records: false, manage_users: false, manage_roles: false, view_audit: false
-  },
-  rbt: {
-    view_patients: true, edit_patients: false, record_sessions: true, record_behavior_events: true,
-    create_therapy_plans: false, approve_plans: false, create_incidents: true, generate_reports: false,
-    sign_records: false, manage_users: false, manage_roles: false, view_audit: false
-  },
-  billing_auditor: {
-    view_patients: true, edit_patients: false, record_sessions: false, record_behavior_events: false,
-    create_therapy_plans: false, approve_plans: false, create_incidents: false, generate_reports: false,
-    sign_records: false, manage_users: false, manage_roles: false, view_audit: true
-  },
-  read_only: {
-    view_patients: true, edit_patients: false, record_sessions: false, record_behavior_events: false,
-    create_therapy_plans: false, approve_plans: false, create_incidents: false, generate_reports: false,
-    sign_records: false, manage_users: false, manage_roles: false, view_audit: false
-  }
-};
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is required.");
@@ -75,7 +35,7 @@ if (JWT_SECRET === "dev-only-change-me" && process.env.NODE_ENV === "production"
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: String(process.env.PGSSL || "").toLowerCase() === "true" ? { rejectUnauthorized: false } : false,
-  max: 10
+  max: 10,
 });
 
 const app = express();
@@ -85,7 +45,120 @@ app.use(cors({ origin: SITE_ORIGIN.split(",").map(s => s.trim()), credentials: t
 app.use(express.json({ limit: "3mb" }));
 app.use(cookieParser());
 app.use(express.static(join(__dirname, "public")));
-app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
+
+const roles = ["org_admin", "bcba", "supervisor", "therapist", "rbt", "billing_auditor", "read_only"];
+const permissionKeys = [
+  "patients.view", "patients.edit",
+  "sessions.view", "sessions.edit", "sessions.delete", "sessions.review",
+  "behaviors.view", "behaviors.edit", "behaviors.delete", "behaviors.review",
+  "plans.view", "plans.edit", "plans.delete", "plans.review",
+  "incidents.view", "incidents.edit", "incidents.delete", "incidents.review",
+  "reports.view", "reports.edit", "reports.delete", "reports.review",
+  "admin.users", "admin.roles", "audit.view"
+];
+
+const defaultPermissions = {
+  org_admin: permissionKeys,
+  bcba: ["patients.view", "patients.edit", "sessions.view", "sessions.edit", "sessions.review", "behaviors.view", "behaviors.edit", "behaviors.review", "plans.view", "plans.edit", "plans.review", "incidents.view", "incidents.edit", "incidents.review", "reports.view", "reports.edit", "reports.review", "audit.view"],
+  supervisor: ["patients.view", "patients.edit", "sessions.view", "sessions.edit", "sessions.review", "behaviors.view", "behaviors.edit", "behaviors.review", "plans.view", "plans.edit", "incidents.view", "incidents.edit", "incidents.review", "reports.view", "reports.edit", "reports.review"],
+  therapist: ["patients.view", "sessions.view", "sessions.edit", "behaviors.view", "behaviors.edit", "incidents.view", "incidents.edit", "reports.view", "reports.edit"],
+  rbt: ["patients.view", "sessions.view", "sessions.edit", "behaviors.view", "behaviors.edit", "incidents.view", "incidents.edit"],
+  billing_auditor: ["patients.view", "sessions.view", "reports.view", "audit.view"],
+  read_only: ["patients.view", "sessions.view", "behaviors.view", "plans.view", "incidents.view", "reports.view"]
+};
+
+const resourceConfigs = {
+  sessions: {
+    singular: "session",
+    table: "session_logs",
+    listTitle: "Session",
+    idField: "id",
+    createdByField: "user_id",
+    allowedRoles: ["org_admin", "bcba", "supervisor", "therapist", "rbt"],
+    viewPermission: "sessions.view",
+    editPermission: "sessions.edit",
+    deletePermission: "sessions.delete",
+    reviewPermission: "sessions.review",
+    insertColumns: ["patient_id", "session_date", "start_time", "end_time", "location", "service_code", "participants", "activities", "interventions_used", "response_to_intervention", "progress_notes", "ai_summary", "status"],
+    updateColumns: ["patient_id", "session_date", "start_time", "end_time", "location", "service_code", "participants", "activities", "interventions_used", "response_to_intervention", "progress_notes", "ai_summary", "status"],
+    required: ["patient_id"],
+    select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+  },
+  behaviors: {
+    singular: "behavior",
+    table: "behavior_events",
+    listTitle: "Behavior Event",
+    idField: "id",
+    createdByField: "user_id",
+    allowedRoles: ["org_admin", "bcba", "supervisor", "therapist", "rbt"],
+    viewPermission: "behaviors.view",
+    editPermission: "behaviors.edit",
+    deletePermission: "behaviors.delete",
+    reviewPermission: "behaviors.review",
+    insertColumns: ["patient_id", "event_time", "antecedent", "behavior", "consequence", "intensity", "duration_seconds", "location", "suspected_function", "deescalation", "injury", "restraint", "notes", "status"],
+    updateColumns: ["patient_id", "event_time", "antecedent", "behavior", "consequence", "intensity", "duration_seconds", "location", "suspected_function", "deescalation", "injury", "restraint", "notes", "status"],
+    required: ["patient_id", "behavior"],
+    select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+  },
+  plans: {
+    singular: "plan",
+    table: "therapy_plans",
+    listTitle: "Therapy Plan",
+    idField: "id",
+    createdByField: "created_by",
+    allowedRoles: ["org_admin", "bcba", "supervisor"],
+    viewPermission: "plans.view",
+    editPermission: "plans.edit",
+    deletePermission: "plans.delete",
+    reviewPermission: "plans.review",
+    insertColumns: ["patient_id", "title", "plan_type", "goals", "interventions", "restrictions", "effective_from", "effective_to", "status"],
+    updateColumns: ["patient_id", "title", "plan_type", "goals", "interventions", "restrictions", "effective_from", "effective_to", "status"],
+    jsonColumns: ["goals", "interventions", "restrictions"],
+    required: ["patient_id", "title"],
+    select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+  },
+  incidents: {
+    singular: "incident",
+    table: "incidents",
+    listTitle: "Incident",
+    idField: "id",
+    createdByField: "reported_by",
+    allowedRoles: ["org_admin", "bcba", "supervisor", "therapist", "rbt"],
+    viewPermission: "incidents.view",
+    editPermission: "incidents.edit",
+    deletePermission: "incidents.delete",
+    reviewPermission: "incidents.review",
+    insertColumns: ["patient_id", "incident_date", "category", "severity", "location", "description", "immediate_actions", "notifications", "status"],
+    updateColumns: ["patient_id", "incident_date", "category", "severity", "location", "description", "immediate_actions", "notifications", "status"],
+    required: ["patient_id", "category", "description"],
+    select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+  },
+  reports: {
+    singular: "report",
+    table: "ai_reports",
+    listTitle: "Report",
+    idField: "id",
+    createdByField: "created_by",
+    allowedRoles: ["org_admin", "bcba", "supervisor", "therapist"],
+    viewPermission: "reports.view",
+    editPermission: "reports.edit",
+    deletePermission: "reports.delete",
+    reviewPermission: "reports.review",
+    insertColumns: ["patient_id", "report_type", "prompt", "output", "status"],
+    updateColumns: ["patient_id", "report_type", "prompt", "output", "status"],
+    required: ["patient_id", "output"],
+    select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+  }
+};
+
+const reviewTypeMap = {
+  session: "sessions", sessions: "sessions",
+  behavior: "behaviors", behaviors: "behaviors",
+  plan: "plans", plans: "plans",
+  incident: "incidents", incidents: "incidents",
+  report: "reports", reports: "reports"
+};
 
 function sign(user) {
   return jwt.sign({
@@ -99,30 +172,6 @@ function sign(user) {
   }, JWT_SECRET, { expiresIn: "8h" });
 }
 
-function requireAuth(req, res, next) {
-  const hdr = req.headers.authorization || "";
-  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : req.cookies?.ta_token;
-  if (!token) return res.status(401).json({ error: "missing_token", message: "Please login first." });
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: "invalid_token", message: "Your session expired. Please login again." });
-  }
-}
-
-function requireMfa(req, res, next) {
-  if (req.user?.mfa_enabled) return next();
-  return res.status(403).json({ error: "mfa_not_enabled", message: "MFA must be enabled before accessing patient records." });
-}
-
-function allow(...roles) {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) return res.status(403).json({ error: "forbidden", message: "You do not have permission for this action." });
-    next();
-  };
-}
-
 function safeUser(user) {
   return {
     id: user.id,
@@ -131,8 +180,31 @@ function safeUser(user) {
     full_name: user.full_name,
     role: user.role,
     mfa_enabled: Boolean(user.mfa_enabled),
-    active: user.active !== false,
-    last_login_at: user.last_login_at || null
+    active: user.active !== false
+  };
+}
+
+function requireAuth(req, res, next) {
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : req.cookies?.ta_token;
+  if (!token) return res.status(401).json({ error: "missing_token", message: "Please log in." });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: "invalid_token", message: "Your session expired. Please log in again." });
+  }
+}
+
+function requireMfa(req, res, next) {
+  if (req.user?.mfa_enabled) return next();
+  return res.status(403).json({ error: "mfa_not_enabled", message: "MFA must be enabled before accessing patient records." });
+}
+
+function allow(...allowed) {
+  return (req, res, next) => {
+    if (!allowed.includes(req.user.role)) return res.status(403).json({ error: "forbidden", message: "You do not have permission for this action." });
+    next();
   };
 }
 
@@ -144,7 +216,7 @@ async function audit(req, action, entity_type, entity_id, details = {}) {
       [req.user?.org_id || null, req.user?.id || null, action, entity_type, entity_id || null, req.ip, req.get("user-agent") || "", details]
     );
   } catch (e) {
-    console.warn("[audit]", e.message);
+    console.error("[audit]", e.message);
   }
 }
 
@@ -154,33 +226,160 @@ async function initSchema() {
   console.log("Schema ready.");
 }
 
-function patientWhere() { return "org_id = $1"; }
+function validationMessage(result) {
+  const issues = result.error?.issues || [];
+  return issues.map(i => i.message).join(" ") || "Please complete all required fields.";
+}
+
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function toBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (value === "true" || value === "on" || value === "1" || value === 1) return true;
+  return false;
+}
+
+function cleanValue(column, value, cfg) {
+  if (value === "") return null;
+  if ((cfg.jsonColumns || []).includes(column)) {
+    if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value || []);
+    try { return JSON.stringify(JSON.parse(value || "[]")); } catch { return JSON.stringify(String(value || "").split("\n").filter(Boolean)); }
+  }
+  if (["injury", "restraint"].includes(column)) return toBoolean(value);
+  return value ?? null;
+}
+
+function getResourceConfig(type) {
+  const key = reviewTypeMap[type] || type;
+  const cfg = resourceConfigs[key];
+  if (!cfg) return null;
+  return { key, ...cfg };
+}
 
 async function assertPatient(req, id) {
   const row = (await pool.query(`SELECT id FROM patients WHERE id=$1 AND org_id=$2`, [id, req.user.org_id])).rows[0];
   return Boolean(row);
 }
 
-function validationMessage(result) {
-  const issues = result.error?.issues || [];
-  return issues.map(i => i.message).join(" ") || "Please complete all required fields.";
+async function ensureReviewer(req, reviewerId) {
+  const row = (await pool.query(
+    `SELECT id, email, full_name, role, active FROM users WHERE id=$1 AND org_id=$2 AND active=true`,
+    [reviewerId, req.user.org_id]
+  )).rows[0];
+  return row || null;
 }
 
-function makeTempPassword() {
-  return crypto.randomBytes(9).toString("base64url") + "A1!";
+function listSql(cfg, filters = {}) {
+  let where = [`s.org_id = $1`];
+  const params = [filters.org_id];
+  if (filters.patient_id) {
+    params.push(filters.patient_id);
+    where.push(`s.patient_id = $${params.length}`);
+  }
+  if (filters.assigned_to) {
+    params.push(filters.assigned_to);
+    where.push(`s.review_assigned_to = $${params.length}`);
+  }
+  if (filters.created_by) {
+    params.push(filters.created_by);
+    where.push(`s.${cfg.createdByField} = $${params.length}`);
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    where.push(`lower(s.status) = lower($${params.length})`);
+  }
+  const orderField = cfg.table === "session_logs" ? "COALESCE(s.session_date::timestamptz, s.created_at)" :
+    cfg.table === "behavior_events" ? "COALESCE(s.event_time, s.created_at)" :
+    cfg.table === "incidents" ? "COALESCE(s.incident_date, s.created_at)" :
+    "s.created_at";
+  const sql = `SELECT ${cfg.select}
+    FROM ${cfg.table} s
+    LEFT JOIN patients p ON p.id = s.patient_id AND p.org_id = s.org_id
+    LEFT JOIN users cu ON cu.id = s.${cfg.createdByField}
+    LEFT JOIN users mu ON mu.id = s.modified_by
+    LEFT JOIN users ru ON ru.id = s.reviewed_by
+    LEFT JOIN users au ON au.id = s.review_assigned_to
+    WHERE ${where.join(" AND ")}
+    ORDER BY ${orderField} DESC, s.created_at DESC
+    LIMIT 300`;
+  return { sql, params };
 }
 
-function makeMfaSetup(email, secretBase32) {
-  const otpauth_url = speakeasy.otpauthURL({ secret: secretBase32, label: `TherapyAgent:${email}`, issuer: "TherapyAgent", encoding: "base32" });
-  return { secret: secretBase32, otpauth_url, qrDataUrl: "" };
+async function getRecord(req, cfg, id) {
+  const rows = (await pool.query(
+    `SELECT ${cfg.select}
+     FROM ${cfg.table} s
+     LEFT JOIN patients p ON p.id = s.patient_id AND p.org_id = s.org_id
+     LEFT JOIN users cu ON cu.id = s.${cfg.createdByField}
+     LEFT JOIN users mu ON mu.id = s.modified_by
+     LEFT JOIN users ru ON ru.id = s.reviewed_by
+     LEFT JOIN users au ON au.id = s.review_assigned_to
+     WHERE s.id=$1 AND s.org_id=$2`,
+    [id, req.user.org_id]
+  )).rows;
+  return rows[0] || null;
 }
 
-async function getRolePermissions(orgId) {
-  const rows = (await pool.query(`SELECT role, permissions FROM role_permissions WHERE org_id=$1`, [orgId])).rows;
-  const overrides = Object.fromEntries(rows.map(r => [r.role, r.permissions || {}]));
-  const out = {};
-  for (const role of ROLES) out[role] = { ...(DEFAULT_PERMISSIONS[role] || {}), ...(overrides[role] || {}) };
-  return out;
+async function insertRecord(req, cfg, body) {
+  for (const field of cfg.required || []) {
+    if (!body[field]) throw Object.assign(new Error(`${field} is required.`), { status: 400 });
+  }
+  if (body.patient_id && !(await assertPatient(req, body.patient_id))) {
+    throw Object.assign(new Error("Patient not found."), { status: 404 });
+  }
+  const cols = ["org_id", cfg.createdByField, ...cfg.insertColumns];
+  const values = [req.user.org_id, req.user.id, ...cfg.insertColumns.map(c => cleanValue(c, body[c], cfg))];
+  const placeholders = values.map((_, i) => `$${i + 1}`);
+  const sql = `INSERT INTO ${cfg.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`;
+  const row = (await pool.query(sql, values)).rows[0];
+  await audit(req, `${cfg.singular}_created`, cfg.singular, row.id, { patient_id: body.patient_id || null });
+  return row;
+}
+
+async function updateRecord(req, cfg, id, body, options = {}) {
+  const existing = await getRecord(req, cfg, id);
+  if (!existing) throw Object.assign(new Error("Record not found."), { status: 404 });
+  if (body.patient_id && !(await assertPatient(req, body.patient_id))) {
+    throw Object.assign(new Error("Patient not found."), { status: 404 });
+  }
+
+  const fields = options.fields || cfg.updateColumns;
+  const sets = [];
+  const values = [];
+  for (const col of fields) {
+    if (Object.prototype.hasOwnProperty.call(body, col)) {
+      values.push(cleanValue(col, body[col], cfg));
+      sets.push(`${col}=$${values.length}`);
+    }
+  }
+  values.push(req.user.id);
+  sets.push(`modified_by=$${values.length}`);
+  sets.push(`modified_at=now()`);
+  values.push(id, req.user.org_id);
+  if (!sets.length) return existing;
+  const row = (await pool.query(
+    `UPDATE ${cfg.table} SET ${sets.join(", ")} WHERE id=$${values.length - 1} AND org_id=$${values.length} RETURNING *`,
+    values
+  )).rows[0];
+  await audit(req, `${cfg.singular}_updated`, cfg.singular, id, { status: row.status });
+  return row;
+}
+
+async function deleteRecord(req, cfg, id) {
+  const row = (await pool.query(`DELETE FROM ${cfg.table} WHERE id=$1 AND org_id=$2 RETURNING id`, [id, req.user.org_id])).rows[0];
+  if (!row) throw Object.assign(new Error("Record not found."), { status: 404 });
+  await audit(req, `${cfg.singular}_deleted`, cfg.singular, id);
+  return row;
+}
+
+async function addReviewHistory(req, cfg, id, action, fromStatus, toStatus, reviewerId, comment = "") {
+  await pool.query(
+    `INSERT INTO review_history (org_id, entity_type, entity_id, action, from_status, to_status, actor_id, reviewer_id, comment)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [req.user.org_id, cfg.singular, id, action, fromStatus || null, toStatus || null, req.user.id, reviewerId || null, comment || null]
+  );
 }
 
 function redactPhi(text = "") {
@@ -191,7 +390,7 @@ function redactPhi(text = "") {
     .replace(/\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, "[PHONE]");
 }
 
-async function callOpenAI(prompt, jsonMode = false) {
+async function callOpenAI(prompt, json = false) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
   const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
@@ -199,12 +398,12 @@ async function callOpenAI(prompt, jsonMode = false) {
   const body = {
     model,
     messages: [
-      { role: "system", content: "You are a careful clinical documentation assistant. Do not diagnose. Extract only facts stated by the user. Return clinician-reviewable drafts. Highlight uncertainty." },
+      { role: "system", content: "You are a careful clinical documentation assistant. Do not diagnose. Draft factual, neutral, auditable content. Highlight uncertainty and require clinician review." },
       { role: "user", content: prompt }
     ],
-    temperature: 0.1
+    temperature: 0.2
   };
-  if (jsonMode) body.response_format = { type: "json_object" };
+  if (json) body.response_format = { type: "json_object" };
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -215,64 +414,71 @@ async function callOpenAI(prompt, jsonMode = false) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
-function toDateIsoFromText(text) {
+function findDate(text) {
   const now = new Date();
-  const lower = text.toLowerCase();
-  if (/\btoday\b/.test(lower)) return now.toISOString().slice(0, 10);
-  if (/\byesterday\b/.test(lower)) {
-    const d = new Date(now); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10);
-  }
-  const iso = text.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
-  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  if (/\btoday\b/i.test(text)) return now.toISOString().slice(0, 10);
+  if (/\byesterday\b/i.test(text)) { const d = new Date(now); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); }
+  const iso = text.match(/\b(20\d{2}-\d{1,2}-\d{1,2})\b/);
+  if (iso) return iso[1];
+  const us = text.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
   return "";
 }
 
 function extractAfter(text, labels) {
-  const escaped = labels.map(l => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const re = new RegExp(`(?:${escaped})\\s*(?:was|were|is|included|include|:)?\\s*([^.;\\n]+)`, "i");
-  const m = text.match(re);
-  return m ? m[1].trim() : "";
+  const lower = text.toLowerCase();
+  for (const label of labels) {
+    const idx = lower.indexOf(label.toLowerCase());
+    if (idx >= 0) {
+      const piece = text.slice(idx + label.length).split(/\b(?:antecedent|behavior|consequence|intervention|response|activity|activities|location|duration|severity|category|goal|plan|notification|immediate action)\b/i)[0];
+      return piece.replace(/^[:\-\s]+/, "").trim();
+    }
+  }
+  return "";
 }
 
-function heuristicExtract(form, text) {
-  const lower = text.toLowerCase();
+function heuristicExtract(resourceType, text) {
+  const t = String(text || "").trim();
   const fields = {};
-  const raw = String(text || "").trim();
-  const location = extractAfter(raw, ["location", "at", "in room", "in the room", "place"]);
-  const intensity = raw.match(/\bintensity\s*(?:was|is|:)?\s*([1-5])\b/i)?.[1] || raw.match(/\b([1-5])\s*out of\s*5\b/i)?.[1] || "";
-  const duration = raw.match(/\b(\d+)\s*(seconds|second|minutes|minute|min)\b/i);
-
-  if (form === "session") {
-    fields.session_date = toDateIsoFromText(raw);
-    fields.location = location;
-    fields.activities = extractAfter(raw, ["activities", "activity", "worked on", "completed", "performed", "tasks"]);
-    fields.interventions_used = extractAfter(raw, ["interventions", "intervention", "used", "prompting", "supports"]);
-    fields.response_to_intervention = extractAfter(raw, ["response", "client response", "responded", "result"]);
-    fields.progress_notes = raw;
-  } else if (form === "behavior") {
-    fields.location = location;
-    fields.intensity = intensity;
-    if (duration) fields.duration_seconds = duration[2].toLowerCase().startsWith("min") ? String(Number(duration[1]) * 60) : duration[1];
-    fields.antecedent = extractAfter(raw, ["antecedent", "before", "trigger", "after demand", "during transition"]);
-    fields.behavior = extractAfter(raw, ["behavior", "observed", "client did", "incident"]);
-    fields.consequence = extractAfter(raw, ["consequence", "after", "staff responded", "response"]);
-    fields.suspected_function = extractAfter(raw, ["function", "suspected function", "purpose"]);
-    fields.deescalation = extractAfter(raw, ["deescalation", "de-escalation", "calmed", "redirected"]);
-    fields.notes = raw;
-  } else if (form === "incident") {
-    fields.incident_date = fields.incident_date || new Date().toISOString().slice(0, 16);
-    fields.category = lower.includes("injur") ? "injury" : lower.includes("medication") ? "medication" : lower.includes("elop") ? "elopement" : "general";
-    fields.severity = lower.includes("severe") || lower.includes("911") ? "high" : lower.includes("moderate") ? "medium" : "low";
-    fields.description = raw;
-    fields.immediate_actions = extractAfter(raw, ["immediate actions", "staff", "responded", "action taken"]);
-    fields.notifications = extractAfter(raw, ["notified", "notification", "called"]);
-  } else if (form === "plan") {
-    fields.goals = JSON.stringify([{ name: "Draft goal", description: raw }], null, 2);
-    fields.interventions = JSON.stringify([{ name: "Draft intervention", description: extractAfter(raw, ["intervention", "interventions", "use", "strategy"]) || raw }], null, 2);
-  } else if (form === "report") {
-    fields.note = raw;
+  const date = findDate(t);
+  const location = extractAfter(t, ["location", "at ", "in "]);
+  if (resourceType === "sessions") {
+    if (date) fields.session_date = date;
+    if (location) fields.location = location;
+    fields.activities = extractAfter(t, ["activities", "activity", "worked on", "completed"]) || t;
+    fields.interventions_used = extractAfter(t, ["interventions", "intervention", "used"]);
+    fields.response_to_intervention = extractAfter(t, ["response", "client response"]);
+    fields.progress_notes = t;
+  } else if (resourceType === "behaviors") {
+    if (location) fields.location = location;
+    const intensity = t.match(/\bintensity\s*(?:of|was|is|:)?\s*([1-5])\b/i);
+    if (intensity) fields.intensity = intensity[1];
+    const duration = t.match(/\b(\d+)\s*(?:seconds|second|minutes|minute|min)\b/i);
+    if (duration) fields.duration_seconds = /min/i.test(duration[0]) ? String(Number(duration[1]) * 60) : duration[1];
+    fields.antecedent = extractAfter(t, ["antecedent", "before the behavior"]);
+    fields.behavior = extractAfter(t, ["behavior", "observed"] ) || t;
+    fields.consequence = extractAfter(t, ["consequence", "after the behavior"]);
+    fields.notes = t;
+  } else if (resourceType === "incidents") {
+    if (date) fields.incident_date = date;
+    if (location) fields.location = location;
+    fields.category = extractAfter(t, ["category", "incident type"]) || "general";
+    fields.severity = /\b(high|severe|critical)\b/i.test(t) ? "high" : /\b(medium|moderate)\b/i.test(t) ? "medium" : "low";
+    fields.description = t;
+    fields.immediate_actions = extractAfter(t, ["immediate actions", "action taken", "actions taken"]);
+    fields.notifications = extractAfter(t, ["notifications", "notified"]);
+  } else if (resourceType === "plans") {
+    fields.title = extractAfter(t, ["title", "plan for"]) || "Therapy plan";
+    fields.plan_type = /behavior/i.test(t) ? "behavior_support" : "therapy";
+    fields.goals = extractAfter(t, ["goals", "goal"]) || t;
+    fields.interventions = extractAfter(t, ["interventions", "intervention"]);
+    fields.restrictions = extractAfter(t, ["restrictions", "contraindications"]);
+  } else if (resourceType === "reports") {
+    fields.report_type = /monthly/i.test(t) ? "monthly_progress" : "session_summary";
+    fields.prompt = t;
+    fields.output = t;
   }
-  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== "" && v !== null && v !== undefined));
+  return fields;
 }
 
 const registerSchema = z.object({
@@ -283,12 +489,7 @@ const registerSchema = z.object({
   email: z.string().trim().email("A valid login/email is required."),
   password: z.string().min(10, "Password must be at least 10 characters.")
 });
-
-const loginSchema = z.object({
-  email: z.string().trim().email("Enter your login/email."),
-  password: z.string().min(1, "Enter your password."),
-  totp: z.string().optional().or(z.literal(""))
-});
+const loginSchema = z.object({ email: z.string().trim().email("Enter your login/email."), password: z.string().min(1, "Enter your password."), totp: z.string().optional().or(z.literal("")) });
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "therapyagent" }));
 
@@ -303,7 +504,7 @@ app.post("/api/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
   const { organizationId, organizationName, firstName, lastName, email, password } = parsed.data;
-  const normalizedEmail = email.toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const fullName = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim();
   const client = await pool.connect();
   try {
@@ -317,7 +518,7 @@ app.post("/api/register", async (req, res) => {
         return res.status(404).json({ error: "organization_not_found", message: "We could not find that organization. Select an existing organization or enter a new organization name." });
       }
     } else {
-      org = (await client.query(`SELECT id, name FROM organizations WHERE lower(name) = lower($1) LIMIT 1`, [organizationName])).rows[0];
+      org = (await client.query(`SELECT id, name FROM organizations WHERE lower(name)=lower($1) LIMIT 1`, [organizationName])).rows[0];
       if (!org) {
         org = (await client.query(`INSERT INTO organizations (name, contact_email) VALUES ($1,$2) RETURNING id, name`, [organizationName, normalizedEmail])).rows[0];
         createdNewOrg = true;
@@ -330,20 +531,20 @@ app.post("/api/register", async (req, res) => {
     }
     const hash = await bcrypt.hash(password, 12);
     const secret = speakeasy.generateSecret({ name: `TherapyAgent:${normalizedEmail}`, issuer: "TherapyAgent" });
+    const role = createdNewOrg ? "org_admin" : "read_only";
+    const active = createdNewOrg;
     const user = (await client.query(
       `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active)
        VALUES ($1,$2,$3,$4,$5,$6,false,$7)
        RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
-      [org.id, normalizedEmail, fullName, hash, createdNewOrg ? "org_admin" : "read_only", secret.base32, createdNewOrg]
+      [org.id, normalizedEmail, fullName, hash, role, secret.base32, active]
     )).rows[0];
     await client.query("COMMIT");
+    const token = sign(user);
     const message = createdNewOrg
-      ? "Account created. Manually enter the MFA setup key in your Authenticator app, verify MFA, then login. You are the organization admin."
-      : "Account request created. Verify MFA now; an organization admin must activate your account before patient records are available.";
-    res.json({
-      token: sign(user), user: safeUser(user), organization: org, status: createdNewOrg ? "registered" : "pending_approval", message,
-      mfaSetup: makeMfaSetup(normalizedEmail, secret.base32)
-    });
+      ? "Account created. Manually enter the MFA setup key in your Authenticator app, verify MFA, then go to Login. You are the organization admin."
+      : "Account request created for the selected organization. Verify MFA now; an organization admin must activate your account before patient records are available.";
+    res.json({ token, user: safeUser(user), organization: org, status: createdNewOrg ? "registered" : "pending_approval", message, mfaSetup: { secret: secret.base32, otpauth_url: secret.otpauth_url, qrDataUrl: "" } });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[register]", e.message);
@@ -357,44 +558,32 @@ app.post("/api/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
   const { email, password, totp } = parsed.data;
-  const normalizedEmail = email.toLowerCase();
   const users = (await pool.query(
-    `SELECT id, org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active, last_login_at
-     FROM users WHERE lower(email) = lower($1)`,
-    [normalizedEmail]
+    `SELECT id, org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active FROM users WHERE lower(email)=lower($1)`,
+    [normalizeEmail(email)]
   )).rows;
   if (users.length > 1) return res.status(409).json({ error: "multiple_accounts", message: "This email is associated with more than one organization. Ask your administrator to confirm the correct login path." });
   const user = users[0];
-  if (!user || !(await bcrypt.compare(String(password || ""), user.password_hash))) {
-    return res.status(401).json({ error: "invalid_login", message: "Email or password is incorrect." });
-  }
+  if (!user || !(await bcrypt.compare(String(password || ""), user.password_hash))) return res.status(401).json({ error: "invalid_login", message: "Email or password is incorrect." });
   if (!user.active) return res.status(403).json({ error: "account_pending", message: "Your account exists, but it is not active yet. Ask your organization admin to approve access." });
-  if (!user.mfa_enabled) {
-    return res.json({
-      token: sign(user),
-      user: safeUser(user),
-      mfaSetupRequired: true,
-      mfaSetup: makeMfaSetup(user.email, user.mfa_secret),
-      message: "Password accepted. MFA is not enabled yet. Enter the setup key in your Authenticator app, verify the 6-digit code, then login again."
-    });
-  }
+  if (!user.mfa_enabled) return res.status(403).json({ error: "mfa_setup_required", message: "MFA is not enabled for this account. Use Create Account / MFA setup to finish enrollment before logging in." });
   const ok = speakeasy.totp.verify({ secret: user.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
   if (!ok) return res.status(401).json({ error: "mfa_required", message: "Enter a valid 6-digit MFA code from your authenticator app." });
-  const updated = (await pool.query(`UPDATE users SET last_login_at=now() WHERE id=$1 RETURNING id, org_id, email, full_name, role, mfa_enabled, active, last_login_at`, [user.id])).rows[0];
-  res.json({ token: sign(updated), user: safeUser(updated), permissions: (await getRolePermissions(updated.org_id))[updated.role], message: `Welcome back, ${updated.full_name}.` });
+  const safe = safeUser(user);
+  res.json({ token: sign(safe), user: safe, message: `Welcome back, ${safe.full_name}.` });
 });
 
 app.post("/api/password/forgot", async (req, res) => {
-  const email = String(req.body?.email || "").trim().toLowerCase();
+  const email = normalizeEmail(req.body?.email);
   if (!email || !email.includes("@")) return res.status(400).json({ error: "email_required", message: "Enter your login/email to start password recovery." });
-  res.json({ ok: true, message: "If an account exists for that email, reset instructions will be sent. Contact your organization admin if you do not receive them." });
+  res.json({ ok: true, message: "If an account exists for that email, password reset instructions will be sent. Contact your organization admin if you do not receive them." });
 });
 
 app.post("/api/mfa/enable", requireAuth, async (req, res) => {
   const { totp } = req.body || {};
   const u = (await pool.query(`SELECT mfa_secret FROM users WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id])).rows[0];
   const ok = u && speakeasy.totp.verify({ secret: u.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
-  if (!ok) return res.status(400).json({ error: "invalid_totp", message: "Enter a valid 6-digit MFA code from your authenticator app." });
+  if (!ok) return res.status(400).json({ error: "invalid_totp", message: "Enter the valid 6-digit code from your Authenticator app." });
   const updated = (await pool.query(
     `UPDATE users SET mfa_enabled=true WHERE id=$1 AND org_id=$2 RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
     [req.user.id, req.user.org_id]
@@ -405,18 +594,123 @@ app.post("/api/mfa/enable", requireAuth, async (req, res) => {
 });
 
 app.get("/api/me", requireAuth, async (req, res) => {
-  const user = (await pool.query(`SELECT id, org_id, email, full_name, role, mfa_enabled, active, last_login_at FROM users WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id])).rows[0];
-  res.json({ user: safeUser(user || req.user), permissions: (await getRolePermissions(req.user.org_id))[req.user.role] || {} });
+  const row = (await pool.query(`SELECT id, org_id, email, full_name, role, mfa_enabled, active FROM users WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id])).rows[0];
+  res.json({ user: safeUser(row || req.user), roles, permissionKeys, defaultPermissions });
 });
 
+// Admin APIs
+app.get("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const rows = (await pool.query(
+    `SELECT u.id, u.email, u.full_name, u.role, u.active, u.mfa_enabled, u.created_at, u.modified_at,
+            mu.full_name AS modified_by_name, iu.full_name AS invited_by_name
+     FROM users u
+     LEFT JOIN users mu ON mu.id = u.modified_by
+     LEFT JOIN users iu ON iu.id = u.invited_by
+     WHERE u.org_id=$1 ORDER BY u.created_at DESC`,
+    [req.user.org_id]
+  )).rows;
+  res.json({ users: rows });
+});
+
+app.post("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const firstName = String(req.body?.firstName || "").trim();
+  const lastName = String(req.body?.lastName || "").trim();
+  const email = normalizeEmail(req.body?.email);
+  const role = roles.includes(req.body?.role) ? req.body.role : "read_only";
+  const initialPassword = String(req.body?.initialPassword || "").trim();
+  if (!firstName || !lastName || !email || !initialPassword) return res.status(400).json({ error: "missing_fields", message: "First name, last name, email, and initial password are required." });
+  if (initialPassword.length < 10) return res.status(400).json({ error: "weak_password", message: "Initial password must be at least 10 characters." });
+  const existing = (await pool.query(`SELECT id FROM users WHERE org_id=$1 AND lower(email)=lower($2)`, [req.user.org_id, email])).rows[0];
+  if (existing) return res.status(409).json({ error: "user_exists", message: "A user with this email already exists in your organization." });
+  const hash = await bcrypt.hash(initialPassword, 12);
+  const secret = speakeasy.generateSecret({ name: `TherapyAgent:${email}`, issuer: "TherapyAgent" });
+  const row = (await pool.query(
+    `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active, invited_by, invited_at)
+     VALUES ($1,$2,$3,$4,$5,$6,false,true,$7,now())
+     RETURNING id, email, full_name, role, active, mfa_enabled, created_at`,
+    [req.user.org_id, email, `${firstName} ${lastName}`.trim(), hash, role, secret.base32, req.user.id]
+  )).rows[0];
+  await audit(req, "admin_user_created", "user", row.id, { role });
+  res.json({ user: row, invite: { email, initialPassword, mfaSetupKey: secret.base32, otpauth_url: secret.otpauth_url, message: "Share this invite through your approved secure channel. Email sending can be wired after SendGrid/HIPAA mail flow is approved." } });
+});
+
+app.patch("/api/admin/users/:id", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const id = req.params.id;
+  const sets = [];
+  const values = [];
+  if (roles.includes(req.body?.role)) { values.push(req.body.role); sets.push(`role=$${values.length}`); }
+  if (Object.prototype.hasOwnProperty.call(req.body, "active")) { values.push(toBoolean(req.body.active)); sets.push(`active=$${values.length}`); }
+  if (req.body?.full_name) { values.push(String(req.body.full_name).trim()); sets.push(`full_name=$${values.length}`); }
+  values.push(req.user.id); sets.push(`modified_by=$${values.length}`); sets.push(`modified_at=now()`);
+  values.push(id, req.user.org_id);
+  const row = (await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id=$${values.length - 1} AND org_id=$${values.length} RETURNING id, email, full_name, role, active, mfa_enabled, modified_at`, values)).rows[0];
+  if (!row) return res.status(404).json({ error: "user_not_found", message: "User not found." });
+  await audit(req, "admin_user_updated", "user", id, { role: row.role, active: row.active });
+  res.json({ user: row });
+});
+
+app.post("/api/admin/users/:id/reset-password", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const initialPassword = String(req.body?.initialPassword || "").trim();
+  if (initialPassword.length < 10) return res.status(400).json({ error: "weak_password", message: "Password must be at least 10 characters." });
+  const hash = await bcrypt.hash(initialPassword, 12);
+  const row = (await pool.query(`UPDATE users SET password_hash=$1, modified_by=$2, modified_at=now() WHERE id=$3 AND org_id=$4 RETURNING id, email, full_name`, [hash, req.user.id, req.params.id, req.user.org_id])).rows[0];
+  if (!row) return res.status(404).json({ error: "user_not_found", message: "User not found." });
+  await audit(req, "admin_password_reset", "user", row.id);
+  res.json({ ok: true, user: row, temporaryPassword: initialPassword });
+});
+
+app.get("/api/admin/role-permissions", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const rows = (await pool.query(`SELECT role, permission_key, enabled FROM role_permissions WHERE org_id=$1`, [req.user.org_id])).rows;
+  const matrix = {};
+  for (const r of roles) {
+    matrix[r] = {};
+    for (const k of permissionKeys) matrix[r][k] = (defaultPermissions[r] || []).includes(k);
+  }
+  for (const row of rows) matrix[row.role][row.permission_key] = row.enabled;
+  res.json({ roles, permissionKeys, matrix });
+});
+
+app.put("/api/admin/role-permissions", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const matrix = req.body?.matrix || {};
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const role of roles) {
+      for (const key of permissionKeys) {
+        const enabled = Boolean(matrix?.[role]?.[key]);
+        await client.query(
+          `INSERT INTO role_permissions (org_id, role, permission_key, enabled, updated_by, updated_at)
+           VALUES ($1,$2,$3,$4,$5,now())
+           ON CONFLICT (org_id, role, permission_key)
+           DO UPDATE SET enabled=excluded.enabled, updated_by=excluded.updated_by, updated_at=now()`,
+          [req.user.org_id, role, key, enabled, req.user.id]
+        );
+      }
+    }
+    await client.query("COMMIT");
+    await audit(req, "role_permissions_updated", "role_permissions", null);
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("[role-permissions]", e.message);
+    res.status(500).json({ error: "permissions_update_failed", message: e.message });
+  } finally { client.release(); }
+});
+
+// Patients
 app.get("/api/patients", requireAuth, requireMfa, async (req, res) => {
-  const rows = (await pool.query(`SELECT * FROM patients WHERE ${patientWhere()} ORDER BY created_at DESC LIMIT 200`, [req.user.org_id])).rows;
+  const rows = (await pool.query(
+    `SELECT p.*, mu.full_name AS modified_by_name
+     FROM patients p LEFT JOIN users mu ON mu.id=p.modified_by
+     WHERE p.org_id=$1 ORDER BY p.created_at DESC LIMIT 500`,
+    [req.user.org_id]
+  )).rows;
   res.json({ patients: rows });
 });
 
 app.post("/api/patients", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor"), async (req, res) => {
   const { first_name, last_name, date_of_birth, external_id, guardian_name, guardian_phone, guardian_email, diagnosis, insurance } = req.body || {};
-  if (!first_name || !last_name) return res.status(400).json({ error: "first_name_last_name_required", message: "Patient first name and last name are required." });
+  if (!first_name || !last_name) return res.status(400).json({ error: "first_name_last_name_required", message: "First name and last name are required." });
   const row = (await pool.query(
     `INSERT INTO patients (org_id, first_name, last_name, date_of_birth, external_id, guardian_name, guardian_phone, guardian_email, diagnosis, insurance)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
@@ -426,204 +720,201 @@ app.post("/api/patients", requireAuth, requireMfa, allow("org_admin", "bcba", "s
   res.json({ patient: row });
 });
 
+app.get("/api/patients/:id/summary", requireAuth, requireMfa, async (req, res) => {
+  const patient = (await pool.query(`SELECT * FROM patients WHERE id=$1 AND org_id=$2`, [req.params.id, req.user.org_id])).rows[0];
+  if (!patient) return res.status(404).json({ error: "patient_not_found", message: "Patient not found." });
+  const out = { patient };
+  for (const [key, cfg0] of Object.entries(resourceConfigs)) {
+    const cfg = { key, ...cfg0 };
+    const { sql, params } = listSql(cfg, { org_id: req.user.org_id, patient_id: patient.id });
+    out[key] = (await pool.query(sql, params)).rows;
+  }
+  res.json(out);
+});
+
+// Resource APIs
+for (const [resourceKey, cfg0] of Object.entries(resourceConfigs)) {
+  const cfg = { key: resourceKey, ...cfg0 };
+  const base = `/api/${resourceKey}`;
+  app.get(base, requireAuth, requireMfa, async (req, res) => {
+    const { sql, params } = listSql(cfg, { org_id: req.user.org_id, patient_id: req.query.patient_id || null, status: req.query.status || null });
+    res.json({ [resourceKey]: (await pool.query(sql, params)).rows });
+  });
+  app.get(`${base}/:id`, requireAuth, requireMfa, async (req, res) => {
+    const row = await getRecord(req, cfg, req.params.id);
+    if (!row) return res.status(404).json({ error: "not_found", message: `${cfg.listTitle} not found.` });
+    const history = (await pool.query(
+      `SELECT rh.*, au.full_name AS actor_name, ru.full_name AS reviewer_name
+       FROM review_history rh
+       LEFT JOIN users au ON au.id=rh.actor_id
+       LEFT JOIN users ru ON ru.id=rh.reviewer_id
+       WHERE rh.org_id=$1 AND rh.entity_type=$2 AND rh.entity_id=$3
+       ORDER BY rh.created_at DESC`,
+      [req.user.org_id, cfg.singular, req.params.id]
+    )).rows;
+    res.json({ [cfg.singular]: row, history });
+  });
+  app.post(base, requireAuth, requireMfa, allow(...cfg.allowedRoles), async (req, res) => {
+    try {
+      const row = await insertRecord(req, cfg, { ...req.body, status: req.body?.status || "draft" });
+      res.json({ [cfg.singular]: row });
+    } catch (e) { res.status(e.status || 500).json({ error: "save_failed", message: e.message }); }
+  });
+  app.put(`${base}/:id`, requireAuth, requireMfa, allow(...cfg.allowedRoles), async (req, res) => {
+    try {
+      const row = await updateRecord(req, cfg, req.params.id, req.body || {});
+      res.json({ [cfg.singular]: row });
+    } catch (e) { res.status(e.status || 500).json({ error: "update_failed", message: e.message }); }
+  });
+  app.delete(`${base}/:id`, requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+    try { await deleteRecord(req, cfg, req.params.id); res.json({ ok: true }); }
+    catch (e) { res.status(e.status || 500).json({ error: "delete_failed", message: e.message }); }
+  });
+}
+
+// Backward-compatible aliases from earlier build.
+app.get("/api/session-logs", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig("sessions");
+  const { sql, params } = listSql(cfg, { org_id: req.user.org_id, patient_id: req.query.patient_id || null });
+  res.json({ session_logs: (await pool.query(sql, params)).rows, sessions: (await pool.query(sql, params)).rows });
+});
 app.post("/api/session-logs", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor", "therapist", "rbt"), async (req, res) => {
-  const b = req.body || {};
-  if (!b.patient_id || !(await assertPatient(req, b.patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Select a valid patient." });
-  const row = (await pool.query(
-    `INSERT INTO session_logs
-     (org_id, patient_id, user_id, session_date, start_time, end_time, location, service_code, participants, activities, interventions_used, response_to_intervention, progress_notes, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-    [req.user.org_id, b.patient_id, req.user.id, b.session_date || null, b.start_time || null, b.end_time || null, b.location || null, b.service_code || null, b.participants || null, b.activities || null, b.interventions_used || null, b.response_to_intervention || null, b.progress_notes || null, b.status || "draft"]
-  )).rows[0];
-  await audit(req, "session_log_created", "session_log", row.id, { patient_id: b.patient_id });
-  res.json({ session_log: row, message: "Session log saved." });
+  try { const cfg = getResourceConfig("sessions"); const row = await insertRecord(req, cfg, { ...req.body, status: req.body?.status || "draft" }); res.json({ session_log: row }); }
+  catch (e) { res.status(e.status || 500).json({ error: "save_failed", message: e.message }); }
 });
-
+app.get("/api/behavior-events", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig("behaviors");
+  const { sql, params } = listSql(cfg, { org_id: req.user.org_id, patient_id: req.query.patient_id || null });
+  const rows = (await pool.query(sql, params)).rows;
+  res.json({ behavior_events: rows, behaviors: rows });
+});
 app.post("/api/behavior-events", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor", "therapist", "rbt"), async (req, res) => {
-  const b = req.body || {};
-  if (!b.patient_id || !(await assertPatient(req, b.patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Select a valid patient." });
-  if (!b.behavior) return res.status(400).json({ error: "behavior_required", message: "Behavior observed is required." });
-  const row = (await pool.query(
-    `INSERT INTO behavior_events
-     (org_id, patient_id, user_id, event_time, antecedent, behavior, consequence, intensity, duration_seconds, location, suspected_function, deescalation, injury, restraint, notes)
-     VALUES ($1,$2,$3,COALESCE($4, now()),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-    [req.user.org_id, b.patient_id, req.user.id, b.event_time || null, b.antecedent || null, b.behavior, b.consequence || null, b.intensity || null, b.duration_seconds || null, b.location || null, b.suspected_function || null, b.deescalation || null, !!b.injury, !!b.restraint, b.notes || null]
-  )).rows[0];
-  await audit(req, "behavior_event_created", "behavior_event", row.id, { patient_id: b.patient_id });
-  res.json({ behavior_event: row, message: "Behavior event saved." });
+  try { const cfg = getResourceConfig("behaviors"); const row = await insertRecord(req, cfg, { ...req.body, status: req.body?.status || "draft" }); res.json({ behavior_event: row }); }
+  catch (e) { res.status(e.status || 500).json({ error: "save_failed", message: e.message }); }
 });
-
-app.post("/api/incidents", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor", "therapist", "rbt"), async (req, res) => {
-  const b = req.body || {};
-  if (!b.patient_id || !(await assertPatient(req, b.patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Select a valid patient." });
-  if (!b.description) return res.status(400).json({ error: "description_required", message: "Incident description is required." });
-  const row = (await pool.query(
-    `INSERT INTO incidents (org_id, patient_id, reported_by, incident_date, category, severity, description, immediate_actions, notifications, status)
-     VALUES ($1,$2,$3,COALESCE($4, now()),$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [req.user.org_id, b.patient_id, req.user.id, b.incident_date || null, b.category || "general", b.severity || "low", b.description, b.immediate_actions || null, b.notifications || null, b.status || "open"]
-  )).rows[0];
-  await audit(req, "incident_created", "incident", row.id, { patient_id: b.patient_id });
-  res.json({ incident: row, message: "Incident saved." });
-});
-
 app.post("/api/therapy-plans", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor"), async (req, res) => {
-  const b = req.body || {};
-  if (!b.patient_id || !(await assertPatient(req, b.patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Select a valid patient." });
-  const row = (await pool.query(
-    `INSERT INTO therapy_plans (org_id, patient_id, title, plan_type, goals, interventions, restrictions, effective_from, effective_to, status, created_by)
-     VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10,$11) RETURNING *`,
-    [req.user.org_id, b.patient_id, b.title || "Therapy plan", b.plan_type || "behavior_support", JSON.stringify(b.goals || []), JSON.stringify(b.interventions || []), JSON.stringify(b.restrictions || []), b.effective_from || null, b.effective_to || null, b.status || "draft", req.user.id]
-  )).rows[0];
-  await audit(req, "therapy_plan_created", "therapy_plan", row.id, { patient_id: b.patient_id });
-  res.json({ therapy_plan: row, message: "Therapy plan saved." });
+  try { const cfg = getResourceConfig("plans"); const row = await insertRecord(req, cfg, { ...req.body, status: req.body?.status || "draft" }); res.json({ therapy_plan: row }); }
+  catch (e) { res.status(e.status || 500).json({ error: "save_failed", message: e.message }); }
 });
 
+// Review workflow
+app.get("/api/inbox", requireAuth, requireMfa, async (req, res) => {
+  const assigned = [];
+  const returned = [];
+  for (const [key, cfg0] of Object.entries(resourceConfigs)) {
+    const cfg = { key, ...cfg0 };
+    const assignedSql = listSql(cfg, { org_id: req.user.org_id, assigned_to: req.user.id, status: "Under Review" });
+    const assignedRows = (await pool.query(assignedSql.sql, assignedSql.params)).rows.map(r => ({ ...r, resource: key, resource_label: cfg.listTitle }));
+    assigned.push(...assignedRows);
+    const returnSql = listSql(cfg, { org_id: req.user.org_id, created_by: req.user.id, status: "Rejected" });
+    const returnRows = (await pool.query(returnSql.sql, returnSql.params)).rows.map(r => ({ ...r, resource: key, resource_label: cfg.listTitle }));
+    returned.push(...returnRows);
+  }
+  assigned.sort((a, b) => new Date(b.review_requested_at || b.created_at) - new Date(a.review_requested_at || a.created_at));
+  returned.sort((a, b) => new Date(b.modified_at || b.created_at) - new Date(a.modified_at || a.created_at));
+  res.json({ assigned, returned });
+});
+
+app.post("/api/review/:type/:id/submit", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig(req.params.type);
+  if (!cfg) return res.status(404).json({ error: "invalid_type", message: "Invalid review item type." });
+  const reviewer = await ensureReviewer(req, req.body?.reviewer_id);
+  if (!reviewer) return res.status(400).json({ error: "reviewer_required", message: "Select an active reviewer from your organization." });
+  const current = await getRecord(req, cfg, req.params.id);
+  if (!current) return res.status(404).json({ error: "not_found", message: "Record not found." });
+  const row = (await pool.query(
+    `UPDATE ${cfg.table}
+     SET status='Under Review', review_assigned_to=$1, review_requested_by=$2, review_requested_at=now(), modified_by=$2, modified_at=now(), rejection_reason=NULL
+     WHERE id=$3 AND org_id=$4 RETURNING *`,
+    [reviewer.id, req.user.id, req.params.id, req.user.org_id]
+  )).rows[0];
+  await addReviewHistory(req, cfg, req.params.id, "submitted_for_review", current.status, "Under Review", reviewer.id, req.body?.comment || "");
+  await audit(req, `${cfg.singular}_submitted_for_review`, cfg.singular, req.params.id, { reviewer_id: reviewer.id });
+  res.json({ item: row, message: `${cfg.listTitle} sent to ${reviewer.full_name} for review.` });
+});
+
+app.post("/api/review/:type/:id/approve", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig(req.params.type);
+  if (!cfg) return res.status(404).json({ error: "invalid_type", message: "Invalid review item type." });
+  const current = await getRecord(req, cfg, req.params.id);
+  if (!current) return res.status(404).json({ error: "not_found", message: "Record not found." });
+  if (current.review_assigned_to !== req.user.id && req.user.role !== "org_admin") return res.status(403).json({ error: "not_assigned", message: "This item is not assigned to you for review." });
+  const row = (await pool.query(
+    `UPDATE ${cfg.table}
+     SET status='Reviewed', reviewed_by=$1, reviewed_at=now(), modified_by=$1, modified_at=now(), rejection_reason=NULL
+     WHERE id=$2 AND org_id=$3 RETURNING *`,
+    [req.user.id, req.params.id, req.user.org_id]
+  )).rows[0];
+  await addReviewHistory(req, cfg, req.params.id, "approved", current.status, "Reviewed", req.user.id, req.body?.comment || "");
+  await audit(req, `${cfg.singular}_approved`, cfg.singular, req.params.id);
+  res.json({ item: row, message: `${cfg.listTitle} reviewed and approved.` });
+});
+
+app.post("/api/review/:type/:id/reject", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig(req.params.type);
+  if (!cfg) return res.status(404).json({ error: "invalid_type", message: "Invalid review item type." });
+  const current = await getRecord(req, cfg, req.params.id);
+  if (!current) return res.status(404).json({ error: "not_found", message: "Record not found." });
+  if (current.review_assigned_to !== req.user.id && req.user.role !== "org_admin") return res.status(403).json({ error: "not_assigned", message: "This item is not assigned to you for review." });
+  const createdBy = current[cfg.createdByField];
+  const row = (await pool.query(
+    `UPDATE ${cfg.table}
+     SET status='Rejected', review_assigned_to=$1, modified_by=$2, modified_at=now(), rejection_reason=$3
+     WHERE id=$4 AND org_id=$5 RETURNING *`,
+    [createdBy, req.user.id, req.body?.comment || "Rejected for changes.", req.params.id, req.user.org_id]
+  )).rows[0];
+  await addReviewHistory(req, cfg, req.params.id, "rejected", current.status, "Rejected", createdBy, req.body?.comment || "Rejected for changes.");
+  await audit(req, `${cfg.singular}_rejected`, cfg.singular, req.params.id, { returned_to: createdBy });
+  res.json({ item: row, message: `${cfg.listTitle} returned to submitter for changes.` });
+});
+
+// AI field extraction and reports
 app.post("/api/ai/extract-fields", requireAuth, requireMfa, async (req, res) => {
-  const { form, text } = req.body || {};
-  if (!text || !String(text).trim()) return res.status(400).json({ error: "text_required", message: "Record or enter notes before asking AI to map fields." });
-  const allowedForms = ["session", "behavior", "incident", "plan", "report"];
-  if (!allowedForms.includes(form)) return res.status(400).json({ error: "invalid_form", message: "Unknown form type." });
+  const resourceType = reviewTypeMap[req.body?.resource_type] || req.body?.resource_type || "sessions";
+  const text = String(req.body?.text || "").trim();
+  if (!text) return res.status(400).json({ error: "text_required", message: "Dictated text is required." });
+  let fields = heuristicExtract(resourceType, text);
   if (ALLOW_PHI_TO_LLM && process.env.OPENAI_API_KEY) {
     try {
-      const prompt = `Extract structured fields from the raw voice note for form type ${form}. Return JSON only. Use only fields that are clearly supported by the note. If uncertain, omit the field. Do not invent facts.\n\nRaw note:\n${text}`;
-      const json = await callOpenAI(prompt, true);
-      const fields = JSON.parse(json);
-      await audit(req, "ai_fields_extracted", form, null, { method: "openai", allowPhiToLlm: true });
-      return res.json({ fields, method: "openai" });
+      const prompt = `Extract structured fields as JSON only for resource type ${resourceType}. Return only valid JSON. Use only facts from the text and leave unknown fields blank. Text:\n${text}`;
+      const raw = await callOpenAI(prompt, true);
+      fields = { ...fields, ...JSON.parse(raw) };
     } catch (e) {
-      console.warn("[ai/extract-fields] falling back", e.message);
+      console.error("[ai/extract-fields] falling back", e.message);
     }
   }
-  const fields = heuristicExtract(form, text);
-  await audit(req, "fields_extracted", form, null, { method: "local_heuristic", allowPhiToLlm: ALLOW_PHI_TO_LLM });
-  res.json({ fields, method: "local_heuristic", message: "Mapped available fields locally. Review before saving." });
+  await audit(req, "ai_fields_extracted", resourceType, null, { allowPhiToLlm: ALLOW_PHI_TO_LLM });
+  res.json({ fields, source: ALLOW_PHI_TO_LLM && process.env.OPENAI_API_KEY ? "ai_or_fallback" : "local_fallback" });
 });
 
 app.post("/api/ai/session-summary", requireAuth, requireMfa, allow("org_admin", "bcba", "supervisor", "therapist"), async (req, res) => {
   const { patient_id, note } = req.body || {};
-  if (!patient_id || !(await assertPatient(req, patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Select a valid patient." });
+  if (!patient_id || !(await assertPatient(req, patient_id))) return res.status(404).json({ error: "patient_not_found", message: "Patient not found." });
   const safeNote = ALLOW_PHI_TO_LLM ? String(note || "") : redactPhi(note || "");
   const prompt = `Draft a structured ABA/I-DD session note from this raw staff note. Sections: session focus, interventions used, client response, progress toward goals, risks/incidents, follow-ups. Keep it factual and mark as clinician-review required.\n\nRaw note:\n${safeNote}`;
   try {
-    const output = await callOpenAI(prompt);
-    const row = (await pool.query(
-      `INSERT INTO ai_reports (org_id, patient_id, created_by, report_type, prompt, output, status)
-       VALUES ($1,$2,$3,'session_summary',$4,$5,'draft') RETURNING *`,
-      [req.user.org_id, patient_id, req.user.id, ALLOW_PHI_TO_LLM ? "[PHI prompt stored by policy]" : prompt, output]
-    )).rows[0];
-    await audit(req, "ai_report_created", "ai_report", row.id, { patient_id, allowPhiToLlm: ALLOW_PHI_TO_LLM });
+    const output = process.env.OPENAI_API_KEY ? await callOpenAI(prompt) : `Draft summary pending AI configuration. Raw note:\n\n${safeNote}`;
+    const cfg = getResourceConfig("reports");
+    const row = await insertRecord(req, cfg, { patient_id, report_type: "session_summary", prompt: ALLOW_PHI_TO_LLM ? "[PHI prompt stored by policy]" : prompt, output, status: "draft" });
+    await audit(req, "ai_report_created", "report", row.id, { patient_id, allowPhiToLlm: ALLOW_PHI_TO_LLM });
     res.json({ report: row, output });
   } catch (e) {
     console.error("[ai/session-summary]", e.message);
-    res.status(502).json({ error: "ai_provider_error", message: "AI report generation failed.", detail: e.message });
+    res.status(502).json({ error: "ai_provider_error", message: e.message });
   }
-});
-
-app.get("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const rows = (await pool.query(
-    `SELECT id, email, full_name, role, mfa_enabled, active, created_at, last_login_at
-     FROM users WHERE org_id=$1 ORDER BY created_at DESC`,
-    [req.user.org_id]
-  )).rows;
-  res.json({ users: rows });
-});
-
-app.post("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const b = req.body || {};
-  const first = String(b.firstName || "").trim();
-  const last = String(b.lastName || "").trim();
-  const email = String(b.email || "").trim().toLowerCase();
-  const role = ROLES.includes(b.role) ? b.role : "read_only";
-  const tempPassword = String(b.initialPassword || "").trim() || makeTempPassword();
-  if (!first || !last || !email.includes("@")) return res.status(400).json({ error: "missing_fields", message: "First name, last name, and valid email are required." });
-  const hash = await bcrypt.hash(tempPassword, 12);
-  const secret = speakeasy.generateSecret({ name: `TherapyAgent:${email}`, issuer: "TherapyAgent" });
-  try {
-    const user = (await pool.query(
-      `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active, invited_by)
-       VALUES ($1,$2,$3,$4,$5,$6,false,true,$7)
-       RETURNING id, org_id, email, full_name, role, mfa_enabled, active, created_at`,
-      [req.user.org_id, email, `${first} ${last}`, hash, role, secret.base32, req.user.id]
-    )).rows[0];
-    await audit(req, "admin_user_created", "user", user.id, { role });
-    res.json({
-      user: safeUser(user),
-      invite: {
-        email,
-        temporaryPassword: tempPassword,
-        mfaSetup: makeMfaSetup(email, secret.base32),
-        message: "Invite email sending is not enabled yet. Copy these temporary credentials to the user through your approved workflow. User must enable MFA on first login."
-      }
-    });
-  } catch (e) {
-    if (String(e.message).includes("duplicate")) return res.status(409).json({ error: "account_exists", message: "A user with this email already exists in this organization." });
-    console.error("[admin/users]", e.message);
-    res.status(500).json({ error: "user_create_failed", message: "Could not create user." });
-  }
-});
-
-app.patch("/api/admin/users/:id", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const { role, active, full_name } = req.body || {};
-  const current = (await pool.query(`SELECT id FROM users WHERE id=$1 AND org_id=$2`, [req.params.id, req.user.org_id])).rows[0];
-  if (!current) return res.status(404).json({ error: "user_not_found", message: "User not found." });
-  const updates = [];
-  const values = [];
-  if (role && ROLES.includes(role)) { values.push(role); updates.push(`role=$${values.length}`); }
-  if (typeof active === "boolean") { values.push(active); updates.push(`active=$${values.length}`); }
-  if (full_name && String(full_name).trim()) { values.push(String(full_name).trim()); updates.push(`full_name=$${values.length}`); }
-  if (!updates.length) return res.status(400).json({ error: "no_changes", message: "No valid changes supplied." });
-  values.push(req.params.id, req.user.org_id);
-  const user = (await pool.query(
-    `UPDATE users SET ${updates.join(", ")} WHERE id=$${values.length - 1} AND org_id=$${values.length}
-     RETURNING id, org_id, email, full_name, role, mfa_enabled, active, last_login_at`,
-    values
-  )).rows[0];
-  await audit(req, "admin_user_updated", "user", user.id, { role: user.role, active: user.active });
-  res.json({ user: safeUser(user), message: "User updated." });
-});
-
-app.post("/api/admin/users/:id/reset-password", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const tempPassword = String(req.body?.temporaryPassword || "").trim() || makeTempPassword();
-  const hash = await bcrypt.hash(tempPassword, 12);
-  const secret = speakeasy.generateSecret({ issuer: "TherapyAgent" });
-  const user = (await pool.query(
-    `UPDATE users SET password_hash=$1, mfa_secret=$2, mfa_enabled=false WHERE id=$3 AND org_id=$4
-     RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
-    [hash, secret.base32, req.params.id, req.user.org_id]
-  )).rows[0];
-  if (!user) return res.status(404).json({ error: "user_not_found", message: "User not found." });
-  await audit(req, "admin_password_reset", "user", user.id);
-  res.json({ user: safeUser(user), temporaryPassword: tempPassword, mfaSetup: makeMfaSetup(user.email, secret.base32), message: "Password reset. User must re-enable MFA on next login." });
-});
-
-app.get("/api/admin/role-permissions", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  res.json({ roles: ROLES, permissions: await getRolePermissions(req.user.org_id) });
-});
-
-app.put("/api/admin/role-permissions", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const { role, permissions } = req.body || {};
-  if (!ROLES.includes(role) || typeof permissions !== "object" || !permissions) return res.status(400).json({ error: "invalid_permissions", message: "Select a valid role and permissions." });
-  await pool.query(
-    `INSERT INTO role_permissions (org_id, role, permissions, updated_by, updated_at)
-     VALUES ($1,$2,$3::jsonb,$4,now())
-     ON CONFLICT (org_id, role) DO UPDATE SET permissions=EXCLUDED.permissions, updated_by=EXCLUDED.updated_by, updated_at=now()`,
-    [req.user.org_id, role, JSON.stringify(permissions), req.user.id]
-  );
-  await audit(req, "role_permissions_updated", "role", null, { role });
-  res.json({ permissions: await getRolePermissions(req.user.org_id), message: "Role permissions saved." });
 });
 
 app.get("/api/audit", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
-  const rows = (await pool.query(`SELECT * FROM audit_log WHERE org_id=$1 ORDER BY created_at DESC LIMIT 200`, [req.user.org_id])).rows;
+  const rows = (await pool.query(
+    `SELECT a.*, u.full_name AS user_name
+     FROM audit_log a LEFT JOIN users u ON u.id=a.user_id
+     WHERE a.org_id=$1 ORDER BY a.created_at DESC LIMIT 500`,
+    [req.user.org_id]
+  )).rows;
   res.json({ audit: rows });
 });
 
 app.get("*", (_req, res) => res.sendFile(join(__dirname, "public", "index.html")));
 
-try {
-  await initSchema();
-  app.listen(PORT, () => console.log(`TherapyAgent listening on port ${PORT}`));
-} catch (e) {
-  console.error("Schema init failed:", e.message);
-  process.exit(1);
-}
+await initSchema();
+app.listen(PORT, () => console.log(`TherapyAgent listening on port ${PORT}`));
