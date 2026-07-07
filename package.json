@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "migrate": "psql \"$DATABASE_URL\" -f db/schema.sql"
+    "migrate": "bash -lc 'set -a; [ -f .env ] && source .env; set +a; psql \"$DATABASE_URL\" -f db/schema.sql'"
   },
   "engines": {
     "node": ">=20"
