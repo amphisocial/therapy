@@ -23,7 +23,7 @@
       <a href="#workspace">Workspace</a>
       <a href="#agents">Agents</a>
       <a href="#compliance">Compliance</a>
-      <button id="openAuth" class="btn small">Register / Login</button>
+      <button id="openAuth" class="btn small">Login</button>
     </nav>
   </header>
 
@@ -209,34 +209,92 @@
   </main>
 
   <div class="modal" id="authModal" aria-hidden="true">
-    <div class="modal-card">
-      <button class="x" id="closeAuth">×</button>
-      <h2>Register first organization admin</h2>
-      <p>First user becomes the organization admin. MFA setup is returned by the API and should be enforced before production use.</p>
-      <form id="registerForm" class="form-grid long">
-        <input name="organizationName" placeholder="Organization name" required>
-        <input name="adminName" placeholder="Admin full name" required>
-        <input name="email" type="email" placeholder="Admin email" required>
-        <input name="password" type="password" placeholder="Password, min 10 chars" required>
-        <button class="btn">Create organization</button>
-      </form>
-      <hr>
-      <h3>Login</h3>
-      <form id="loginForm" class="form-grid long">
-        <input name="email" type="email" placeholder="Email">
-        <input name="password" type="password" placeholder="Password">
-        <input name="totp" placeholder="MFA code if enabled">
-        <button class="btn secondary">Login</button>
-      </form>
-      <h3>Enable MFA</h3>
-      <p>After registration, scan the returned otpauth URL or enter the base32 secret in an authenticator app, then verify the 6-digit code.</p>
-      <form id="mfaForm" class="form-grid long">
-        <input name="totp" placeholder="6-digit MFA code">
-        <button class="btn">Enable MFA</button>
-      </form>
-      <pre id="authOutput" class="output"></pre>
+    <div class="modal-card auth-card">
+      <button class="x" id="closeAuth" aria-label="Close authentication dialog">×</button>
+
+      <div class="auth-layout">
+        <aside class="auth-side">
+          <p class="eyebrow">Secure access</p>
+          <h2>Sign in, create an account, or recover access.</h2>
+          <p>Every user must enroll MFA before accessing patient records. Organization admins control roles and patient access.</p>
+          <div class="auth-steps">
+            <span>1. Create account</span>
+            <span>2. Scan MFA QR</span>
+            <span>3. Verify code</span>
+            <span>4. Return to login</span>
+          </div>
+        </aside>
+
+        <section class="auth-main">
+          <div class="auth-tabs" role="tablist">
+            <button class="auth-tab active" data-auth-screen="login" type="button">Login</button>
+            <button class="auth-tab" data-auth-screen="register" type="button">Create Account</button>
+            <button class="auth-tab" data-auth-screen="forgot" type="button">Forgot Password</button>
+          </div>
+
+          <div id="authMessage" class="auth-message" aria-live="polite"></div>
+
+          <section class="auth-screen active" id="auth-login">
+            <h3>Login</h3>
+            <p class="auth-help">Use your email, password, and the 6-digit code from your authenticator app.</p>
+            <form id="loginForm" class="auth-form">
+              <label>Email / login ID<input name="email" type="email" autocomplete="email" required></label>
+              <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+              <label>MFA code<input name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required></label>
+              <button class="btn">Login</button>
+            </form>
+          </section>
+
+          <section class="auth-screen" id="auth-register">
+            <h3>Create Account</h3>
+            <p class="auth-help">Select your organization if it already exists. If it does not appear, enter the new organization name and the first user becomes the organization admin.</p>
+            <form id="registerForm" class="auth-form">
+              <label>Organization
+                <input id="orgSearch" name="organizationName" list="organizationOptions" placeholder="Start typing your organization name" autocomplete="organization" required>
+                <datalist id="organizationOptions"></datalist>
+                <input type="hidden" id="organizationId" name="organizationId">
+                <small id="orgHint">Existing organizations will appear as you type. Clear the field and type a new legal name to create a new organization.</small>
+              </label>
+              <div class="two-col">
+                <label>First name<input name="firstName" autocomplete="given-name" required></label>
+                <label>Last name<input name="lastName" autocomplete="family-name" required></label>
+              </div>
+              <label>Email / login ID<input name="email" type="email" autocomplete="email" required></label>
+              <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" placeholder="Minimum 10 characters" required></label>
+              <button class="btn">Create account & setup MFA</button>
+            </form>
+
+            <div id="mfaSetupPanel" class="mfa-panel" hidden>
+              <div>
+                <h4>Step 2: Scan MFA QR code</h4>
+                <p>Open Microsoft Authenticator, Google Authenticator, 1Password, or another TOTP app and scan this QR code.</p>
+              </div>
+              <img id="mfaQr" alt="MFA setup QR code">
+              <div class="secret-box">
+                <span>Manual setup key</span>
+                <code id="mfaSecret"></code>
+              </div>
+              <form id="mfaForm" class="auth-form compact">
+                <label>Enter 6-digit MFA code<input name="totp" inputmode="numeric" autocomplete="one-time-code" required></label>
+                <button class="btn">Verify MFA</button>
+              </form>
+              <button id="goLoginAfterMfa" type="button" class="link-btn">MFA is done — go to Login</button>
+            </div>
+          </section>
+
+          <section class="auth-screen" id="auth-forgot">
+            <h3>Forgot Password</h3>
+            <p class="auth-help">Enter your email. If an account exists, reset instructions will be sent or your organization admin can help restore access.</p>
+            <form id="forgotForm" class="auth-form">
+              <label>Email / login ID<input name="email" type="email" autocomplete="email" required></label>
+              <button class="btn secondary">Send reset instructions</button>
+            </form>
+          </section>
+        </section>
+      </div>
     </div>
   </div>
+
 
   <script src="/app.js"></script>
 </body>

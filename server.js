@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import speakeasy from "speakeasy";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -54,7 +55,15 @@ app.use("/api", limiter);
 
 function sign(user) {
   return jwt.sign(
-    { id: user.id, org_id: user.org_id, role: user.role, email: user.email, name: user.full_name },
+    {
+      id: user.id,
+      org_id: user.org_id,
+      role: user.role,
+      email: user.email,
+      name: user.full_name,
+      mfa_enabled: Boolean(user.mfa_enabled),
+      active: user.active !== false
+    },
     JWT_SECRET,
     { expiresIn: "8h" }
   );
@@ -101,60 +110,168 @@ async function initSchema() {
 }
 
 const registerSchema = z.object({
-  organizationName: z.string().min(2),
-  adminName: z.string().min(2),
-  email: z.string().email(),
-  password: z.string().min(10)
+  organizationId: z.string().uuid().optional().or(z.literal("")),
+  organizationName: z.string().trim().min(2, "Organization name is required."),
+  firstName: z.string().trim().min(1, "First name is required."),
+  lastName: z.string().trim().min(1, "Last name is required."),
+  email: z.string().trim().email("A valid login/email is required."),
+  password: z.string().min(10, "Password must be at least 10 characters.")
 });
+
+const loginSchema = z.object({
+  email: z.string().trim().email("Enter your login/email."),
+  password: z.string().min(1, "Enter your password."),
+  totp: z.string().optional().or(z.literal(""))
+});
+
+function validationMessage(result) {
+  const issues = result.error?.issues || [];
+  return issues.map(i => i.message).join(" ") || "Please complete all required fields.";
+}
+
+function safeUser(user) {
+  return {
+    id: user.id,
+    org_id: user.org_id,
+    email: user.email,
+    full_name: user.full_name,
+    role: user.role,
+    mfa_enabled: Boolean(user.mfa_enabled),
+    active: user.active !== false
+  };
+}
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "therapyagent" }));
 
+app.get("/api/organizations", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (q.length < 2) return res.json({ organizations: [] });
+  const rows = (await pool.query(
+    `SELECT id, name FROM organizations WHERE name ILIKE $1 ORDER BY name ASC LIMIT 12`,
+    [`%${q}%`]
+  )).rows;
+  res.json({ organizations: rows });
+});
+
 app.post("/api/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { organizationName, adminName, email, password } = parsed.data;
+  if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
+
+  const { organizationId, organizationName, firstName, lastName, email, password } = parsed.data;
+  const normalizedEmail = email.toLowerCase();
+  const fullName = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim();
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
-    const org = (await client.query(
-      `INSERT INTO organizations (name, contact_email) VALUES ($1,$2) RETURNING *`,
-      [organizationName, email.toLowerCase()]
+
+    let org;
+    let createdNewOrg = false;
+
+    if (organizationId) {
+      org = (await client.query(`SELECT id, name FROM organizations WHERE id=$1`, [organizationId])).rows[0];
+      if (!org) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "organization_not_found", message: "We could not find that organization. Select an existing organization or enter a new organization name." });
+      }
+    } else {
+      org = (await client.query(
+        `SELECT id, name FROM organizations WHERE lower(name) = lower($1) LIMIT 1`,
+        [organizationName]
+      )).rows[0];
+      if (!org) {
+        org = (await client.query(
+          `INSERT INTO organizations (name, contact_email) VALUES ($1,$2) RETURNING id, name`,
+          [organizationName, normalizedEmail]
+        )).rows[0];
+        createdNewOrg = true;
+      }
+    }
+
+    const existing = (await client.query(
+      `SELECT id FROM users WHERE org_id=$1 AND lower(email)=lower($2) LIMIT 1`,
+      [org.id, normalizedEmail]
     )).rows[0];
+    if (existing) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "account_exists", message: "An account with this email already exists for that organization. Go to Login or use Forgot Password." });
+    }
+
     const hash = await bcrypt.hash(password, 12);
-    const secret = speakeasy.generateSecret({ name: `TherapyAgent (${email})` });
+    const secret = speakeasy.generateSecret({ name: `TherapyAgent:${normalizedEmail}`, issuer: "TherapyAgent" });
+    const role = createdNewOrg ? "org_admin" : "read_only";
+    const active = createdNewOrg;
+
     const user = (await client.query(
-      `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled)
-       VALUES ($1,$2,$3,$4,'org_admin',$5,false) RETURNING id, org_id, email, full_name, role, mfa_enabled`,
-      [org.id, email.toLowerCase(), adminName, hash, secret.base32]
+      `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active)
+       VALUES ($1,$2,$3,$4,$5,$6,false,$7)
+       RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
+      [org.id, normalizedEmail, fullName, hash, role, secret.base32, active]
     )).rows[0];
+
     await client.query("COMMIT");
+
+    const mfaQrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
     const token = sign(user);
-    res.json({ token, user, mfaSetup: { secret: secret.base32, otpauth_url: secret.otpauth_url } });
+    const message = createdNewOrg
+      ? "Account created. Scan the QR code and verify MFA before logging in. You are the organization admin."
+      : "Account request created for the selected organization. Scan and verify MFA now; an organization admin must activate your account before patient records are available.";
+
+    res.json({
+      token,
+      user: safeUser(user),
+      organization: org,
+      status: createdNewOrg ? "registered" : "pending_approval",
+      message,
+      mfaSetup: { secret: secret.base32, otpauth_url: secret.otpauth_url, qrDataUrl: mfaQrDataUrl }
+    });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[register]", e.message);
-    res.status(500).json({ error: "could_not_register" });
+    res.status(500).json({ error: "could_not_register", message: "Registration could not be completed. Please check the fields and try again." });
   } finally {
     client.release();
   }
 });
 
 app.post("/api/login", async (req, res) => {
-  const { email, password, totp } = req.body || {};
-  const user = (await pool.query(
+  const parsed = loginSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
+  const { email, password, totp } = parsed.data;
+  const normalizedEmail = email.toLowerCase();
+
+  const users = (await pool.query(
     `SELECT id, org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active
-     FROM users WHERE email = $1 AND active = true LIMIT 1`,
-    [String(email || "").toLowerCase()]
-  )).rows[0];
+     FROM users WHERE lower(email) = lower($1)`,
+    [normalizedEmail]
+  )).rows;
+
+  if (users.length > 1) {
+    return res.status(409).json({ error: "multiple_accounts", message: "This email is associated with more than one organization. Ask your administrator to confirm the correct login path." });
+  }
+
+  const user = users[0];
   if (!user || !(await bcrypt.compare(String(password || ""), user.password_hash))) {
-    return res.status(401).json({ error: "invalid_login" });
+    return res.status(401).json({ error: "invalid_login", message: "Email or password is incorrect." });
   }
-  if (user.mfa_enabled) {
-    const ok = speakeasy.totp.verify({ secret: user.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
-    if (!ok) return res.status(401).json({ error: "mfa_required" });
+  if (!user.active) {
+    return res.status(403).json({ error: "account_pending", message: "Your account exists, but it is not active yet. Ask your organization admin to approve access." });
   }
-  const safe = { id: user.id, org_id: user.org_id, email: user.email, full_name: user.full_name, role: user.role, mfa_enabled: user.mfa_enabled };
-  res.json({ token: sign(safe), user: safe });
+  if (!user.mfa_enabled) {
+    return res.status(403).json({ error: "mfa_setup_required", message: "MFA is not enabled for this account. Use Create Account / MFA setup to finish enrollment before logging in." });
+  }
+  const ok = speakeasy.totp.verify({ secret: user.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
+  if (!ok) return res.status(401).json({ error: "mfa_required", message: "Enter a valid 6-digit MFA code from your authenticator app." });
+
+  const safe = safeUser(user);
+  res.json({ token: sign(safe), user: safe, message: `Welcome back, ${safe.full_name}.` });
+});
+
+app.post("/api/password/forgot", async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return res.status(400).json({ error: "email_required", message: "Enter your login/email to start password recovery." });
+  // Production note: create a password reset token and email it through a HIPAA-approved mail workflow.
+  res.json({ ok: true, message: "If an account exists for that email, password reset instructions will be sent. Contact your organization admin if you do not receive them." });
 });
 
 app.post("/api/mfa/enable", requireAuth, async (req, res) => {
@@ -163,12 +280,15 @@ app.post("/api/mfa/enable", requireAuth, async (req, res) => {
   const ok = u && speakeasy.totp.verify({ secret: u.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
   if (!ok) return res.status(400).json({ error: "invalid_totp" });
   const updated = (await pool.query(
-    `SELECT id, org_id, email, full_name, role, true AS mfa_enabled FROM users WHERE id=$1 AND org_id=$2`,
+    `UPDATE users SET mfa_enabled=true WHERE id=$1 AND org_id=$2
+     RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
     [req.user.id, req.user.org_id]
   )).rows[0];
-  await pool.query(`UPDATE users SET mfa_enabled=true WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id]);
   await audit(req, "mfa_enabled", "user", req.user.id);
-  res.json({ ok: true, token: sign(updated), user: updated });
+  const message = updated.active
+    ? "MFA enabled successfully. You can now go to Login and enter with your MFA code."
+    : "MFA enabled successfully. Your account still needs organization admin approval before login."
+  res.json({ ok: true, token: sign(updated), user: safeUser(updated), message });
 });
 
 app.get("/api/me", requireAuth, (req, res) => res.json({ user: req.user }));
