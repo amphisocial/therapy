@@ -12,6 +12,8 @@ import pg from "pg";
 import speakeasy from "speakeasy";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import net from "node:net";
+import tls from "node:tls";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +24,12 @@ const PORT = Number(process.env.PORT || 3060);
 const SITE_ORIGIN = process.env.SITE_ORIGIN || "https://therapyagent.athenabot.ai";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-me";
 const ALLOW_PHI_TO_LLM = String(process.env.ALLOW_PHI_TO_LLM || "false").toLowerCase() === "true";
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const SMTP_FROM = process.env.SMTP_FROM || process.env.EMAIL_FROM || SMTP_USER || "no-reply@therapyagent.athenabot.ai";
+const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || "TherapyAgent";
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is required.");
@@ -168,6 +176,7 @@ function sign(user) {
     email: user.email,
     name: user.full_name,
     mfa_enabled: Boolean(user.mfa_enabled),
+    must_change_password: Boolean(user.must_change_password),
     active: user.active !== false
   }, JWT_SECRET, { expiresIn: "8h" });
 }
@@ -180,6 +189,7 @@ function safeUser(user) {
     full_name: user.full_name,
     role: user.role,
     mfa_enabled: Boolean(user.mfa_enabled),
+    must_change_password: Boolean(user.must_change_password),
     active: user.active !== false
   };
 }
@@ -197,8 +207,20 @@ function requireAuth(req, res, next) {
 }
 
 function requireMfa(req, res, next) {
-  if (req.user?.mfa_enabled) return next();
-  return res.status(403).json({ error: "mfa_not_enabled", message: "MFA must be enabled before accessing patient records." });
+  if (req.user?.must_change_password) {
+    return res.status(403).json({
+      error: "password_change_required",
+      message: "Please change your temporary password before continuing."
+    });
+  }
+  // MFA is optional by default for admin-invited users.
+  // Set MFA_REQUIRED=true in .env if you later want to enforce MFA before PHI access.
+  const mfaRequired = String(process.env.MFA_REQUIRED || "false").toLowerCase() === "true";
+  if (!mfaRequired || req.user?.mfa_enabled) return next();
+  return res.status(403).json({
+    error: "mfa_not_enabled",
+    message: "MFA is required by this organization before accessing patient records."
+  });
 }
 
 function allow(...allowed) {
@@ -233,6 +255,133 @@ function validationMessage(result) {
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
+}
+
+function validateStrongPassword(password = "") {
+  const errors = [];
+  if (String(password).length < 10) errors.push("at least 10 characters");
+  if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
+  if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
+  if (!/[0-9]/.test(password)) errors.push("one number");
+  if (!/[^A-Za-z0-9]/.test(password)) errors.push("one special character");
+  return errors;
+}
+function strongPasswordMessage(errors) {
+  return `Password must include ${errors.join(", ")}.`;
+}
+function smtpConfigured() {
+  return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM);
+}
+function encodeHeader(value = "") {
+  const s = String(value || "");
+  return /^[\x00-\x7F]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s, "utf8").toString("base64")}?=`;
+}
+function cleanEmailAddress(value = "") {
+  const m = String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m ? m[0] : String(value).trim();
+}
+function smtpRead(socket) {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const onData = chunk => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split(/\r?\n/).filter(Boolean);
+      const last = lines[lines.length - 1] || "";
+      if (/^\d{3} /.test(last)) {
+        socket.off("data", onData);
+        resolve(buffer);
+      }
+    };
+    socket.on("data", onData);
+    socket.once("error", reject);
+  });
+}
+async function smtpSend(socket, command, expected = /^[23]/) {
+  if (command) socket.write(command + "\r\n");
+  const response = await smtpRead(socket);
+  if (expected && !expected.test(response)) throw new Error(`SMTP error after ${String(command || "connect").slice(0, 30)}: ${response.trim()}`);
+  return response;
+}
+function connectSmtp(host, port, secure) {
+  return new Promise((resolve, reject) => {
+    const socket = secure
+      ? tls.connect({ host, port, servername: host }, () => resolve(socket))
+      : net.connect({ host, port }, () => resolve(socket));
+    socket.setTimeout(15000);
+    socket.once("error", reject);
+    socket.once("timeout", () => reject(new Error("SMTP connection timed out")));
+  });
+}
+function buildEmail({ to, subject, text, html }) {
+  const boundary = `ta_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const from = `"${SMTP_FROM_NAME.replaceAll('"', "'")}" <${cleanEmailAddress(SMTP_FROM)}>`;
+  const safeTo = cleanEmailAddress(to);
+  const plain = String(text || "").replace(/\r?\n/g, "\r\n");
+  const htmlPart = String(html || text || "");
+  return [
+    `From: ${from}`,
+    `To: <${safeTo}>`,
+    `Subject: ${encodeHeader(subject)}`,
+    `Date: ${new Date().toUTCString()}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=UTF-8`,
+    `Content-Transfer-Encoding: 8bit`,
+    "",
+    plain,
+    `--${boundary}`,
+    `Content-Type: text/html; charset=UTF-8`,
+    `Content-Transfer-Encoding: 8bit`,
+    "",
+    htmlPart,
+    `--${boundary}--`,
+    ""
+  ].join("\r\n").replace(/^\./gm, "..");
+}
+async function sendSmtpMail({ to, subject, text, html }) {
+  if (!smtpConfigured()) return { sent: false, reason: "SMTP is not configured in .env" };
+  const host = SMTP_HOST;
+  const port = SMTP_PORT;
+  const secure = String(process.env.SMTP_SECURE || "").toLowerCase() === "true" || port === 465;
+  let socket = await connectSmtp(host, port, secure);
+  try {
+    await smtpSend(socket, null);
+    await smtpSend(socket, `EHLO ${process.env.SMTP_EHLO || "therapyagent.local"}`);
+    if (!secure && String(process.env.SMTP_STARTTLS || "true").toLowerCase() !== "false") {
+      await smtpSend(socket, "STARTTLS");
+      socket = tls.connect({ socket, servername: host });
+      await new Promise((resolve, reject) => { socket.once("secureConnect", resolve); socket.once("error", reject); });
+      await smtpSend(socket, `EHLO ${process.env.SMTP_EHLO || "therapyagent.local"}`);
+    }
+    await smtpSend(socket, "AUTH LOGIN", /^334/);
+    await smtpSend(socket, Buffer.from(SMTP_USER).toString("base64"), /^334/);
+    await smtpSend(socket, Buffer.from(SMTP_PASS).toString("base64"), /^235/);
+    await smtpSend(socket, `MAIL FROM:<${cleanEmailAddress(SMTP_FROM)}>`, /^250/);
+    await smtpSend(socket, `RCPT TO:<${cleanEmailAddress(to)}>`, /^[23]/);
+    await smtpSend(socket, "DATA", /^354/);
+    socket.write(buildEmail({ to, subject, text, html }) + "\r\n.\r\n");
+    await smtpSend(socket, null, /^250/);
+    try { await smtpSend(socket, "QUIT", /^[23]/); } catch {}
+    return { sent: true };
+  } finally {
+    try { socket.end(); } catch {}
+  }
+}
+function inviteEmailContent({ fullName, email, initialPassword }) {
+  const loginUrl = SITE_ORIGIN.replace(/\/$/, "");
+  const rules = "at least 10 characters, one uppercase letter, one lowercase letter, one number, and one special character";
+  const text = `Hello ${fullName},\n\nYou have been invited to TherapyAgent.\n\nLogin link: ${loginUrl}\nLogin/email: ${email}\nTemporary password: ${initialPassword}\n\nOn first login, you will be asked to change this temporary password. Your new password must include ${rules}.\n\nMFA is optional. After login, the workspace will show instructions if you choose to enable MFA.\n\nTherapyAgent`;
+  const html = `<p>Hello ${fullName},</p><p>You have been invited to <strong>TherapyAgent</strong>.</p><p><a href="${loginUrl}">Open TherapyAgent</a></p><p><strong>Login/email:</strong> ${email}<br><strong>Temporary password:</strong> ${initialPassword}</p><p>On first login, you will be asked to change this temporary password. Your new password must include ${rules}.</p><p>MFA is optional. After login, the workspace will show instructions if you choose to enable MFA.</p><p>TherapyAgent</p>`;
+  return { subject: "Your TherapyAgent login", text, html };
+}
+function resetEmailContent({ fullName, email, temporaryPassword }) {
+  const loginUrl = SITE_ORIGIN.replace(/\/$/, "");
+  const rules = "at least 10 characters, one uppercase letter, one lowercase letter, one number, and one special character";
+  const text = `Hello ${fullName},\n\nYour TherapyAgent password was reset by your organization administrator.\n\nLogin link: ${loginUrl}\nLogin/email: ${email}\nTemporary password: ${temporaryPassword}\n\nOn next login, you will be asked to change this temporary password. Your new password must include ${rules}.\n\nTherapyAgent`;
+  const html = `<p>Hello ${fullName},</p><p>Your TherapyAgent password was reset by your organization administrator.</p><p><a href="${loginUrl}">Open TherapyAgent</a></p><p><strong>Login/email:</strong> ${email}<br><strong>Temporary password:</strong> ${temporaryPassword}</p><p>On next login, you will be asked to change this temporary password. Your new password must include ${rules}.</p><p>TherapyAgent</p>`;
+  return { subject: "Your TherapyAgent temporary password", text, html };
 }
 
 function toBoolean(value) {
@@ -505,6 +654,8 @@ app.post("/api/register", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
   const { organizationId, organizationName, firstName, lastName, email, password } = parsed.data;
   const normalizedEmail = normalizeEmail(email);
+  const pwdErrors = validateStrongPassword(password);
+  if (pwdErrors.length) return res.status(400).json({ error: "weak_password", message: strongPasswordMessage(pwdErrors) });
   const fullName = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim();
   const client = await pool.connect();
   try {
@@ -536,7 +687,7 @@ app.post("/api/register", async (req, res) => {
     const user = (await client.query(
       `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active)
        VALUES ($1,$2,$3,$4,$5,$6,false,$7)
-       RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
+       RETURNING id, org_id, email, full_name, role, mfa_enabled, must_change_password, active`,
       [org.id, normalizedEmail, fullName, hash, role, secret.base32, active]
     )).rows[0];
     await client.query("COMMIT");
@@ -559,18 +710,25 @@ app.post("/api/login", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
   const { email, password, totp } = parsed.data;
   const users = (await pool.query(
-    `SELECT id, org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active FROM users WHERE lower(email)=lower($1)`,
+    `SELECT id, org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, must_change_password, active FROM users WHERE lower(email)=lower($1)`,
     [normalizeEmail(email)]
   )).rows;
   if (users.length > 1) return res.status(409).json({ error: "multiple_accounts", message: "This email is associated with more than one organization. Ask your administrator to confirm the correct login path." });
   const user = users[0];
   if (!user || !(await bcrypt.compare(String(password || ""), user.password_hash))) return res.status(401).json({ error: "invalid_login", message: "Email or password is incorrect." });
   if (!user.active) return res.status(403).json({ error: "account_pending", message: "Your account exists, but it is not active yet. Ask your organization admin to approve access." });
-  if (!user.mfa_enabled) return res.status(403).json({ error: "mfa_setup_required", message: "MFA is not enabled for this account. Use Create Account / MFA setup to finish enrollment before logging in." });
-  const ok = speakeasy.totp.verify({ secret: user.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
-  if (!ok) return res.status(401).json({ error: "mfa_required", message: "Enter a valid 6-digit MFA code from your authenticator app." });
+
+  if (user.mfa_enabled) {
+    const ok = speakeasy.totp.verify({ secret: user.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
+    if (!ok) return res.status(401).json({ error: "mfa_required", message: "Enter a valid 6-digit MFA code from your authenticator app." });
+  }
+
   const safe = safeUser(user);
-  res.json({ token: sign(safe), user: safe, message: `Welcome back, ${safe.full_name}.` });
+  const mfaSetup = user.mfa_enabled ? null : { secret: user.mfa_secret };
+  const message = user.mfa_enabled
+    ? `Welcome back, ${safe.full_name}.`
+    : `Welcome back, ${safe.full_name}. MFA is optional but recommended. You can set it up from the workspace banner.`;
+  res.json({ token: sign(safe), user: safe, mfaSetup, message });
 });
 
 app.post("/api/password/forgot", async (req, res) => {
@@ -579,13 +737,39 @@ app.post("/api/password/forgot", async (req, res) => {
   res.json({ ok: true, message: "If an account exists for that email, password reset instructions will be sent. Contact your organization admin if you do not receive them." });
 });
 
+app.post("/api/change-password", requireAuth, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+  const confirmPassword = String(req.body?.confirmPassword || "");
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: "missing_password", message: "Current password and new password are required." });
+  if (newPassword !== confirmPassword) return res.status(400).json({ error: "password_mismatch", message: "New password and confirmation do not match." });
+  const pwdErrors = validateStrongPassword(newPassword);
+  if (pwdErrors.length) return res.status(400).json({ error: "weak_password", message: strongPasswordMessage(pwdErrors) });
+  if (currentPassword === newPassword) return res.status(400).json({ error: "same_password", message: "New password must be different from the temporary password." });
+  const row = (await pool.query(
+    `SELECT id, org_id, email, full_name, password_hash, role, mfa_enabled, active FROM users WHERE id=$1 AND org_id=$2`,
+    [req.user.id, req.user.org_id]
+  )).rows[0];
+  if (!row || !(await bcrypt.compare(currentPassword, row.password_hash))) return res.status(401).json({ error: "invalid_current_password", message: "Current password is incorrect." });
+  const hash = await bcrypt.hash(newPassword, 12);
+  const updated = (await pool.query(
+    `UPDATE users
+     SET password_hash=$1, must_change_password=false, password_changed_at=now(), modified_by=$2, modified_at=now()
+     WHERE id=$2 AND org_id=$3
+     RETURNING id, org_id, email, full_name, role, mfa_enabled, must_change_password, active`,
+    [hash, req.user.id, req.user.org_id]
+  )).rows[0];
+  await audit(req, "password_changed", "user", req.user.id);
+  res.json({ ok: true, token: sign(updated), user: safeUser(updated), message: "Password changed successfully." });
+});
+
 app.post("/api/mfa/enable", requireAuth, async (req, res) => {
   const { totp } = req.body || {};
   const u = (await pool.query(`SELECT mfa_secret FROM users WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id])).rows[0];
   const ok = u && speakeasy.totp.verify({ secret: u.mfa_secret, encoding: "base32", token: String(totp || ""), window: 1 });
   if (!ok) return res.status(400).json({ error: "invalid_totp", message: "Enter the valid 6-digit code from your Authenticator app." });
   const updated = (await pool.query(
-    `UPDATE users SET mfa_enabled=true WHERE id=$1 AND org_id=$2 RETURNING id, org_id, email, full_name, role, mfa_enabled, active`,
+    `UPDATE users SET mfa_enabled=true WHERE id=$1 AND org_id=$2 RETURNING id, org_id, email, full_name, role, mfa_enabled, must_change_password, active`,
     [req.user.id, req.user.org_id]
   )).rows[0];
   await audit(req, "mfa_enabled", "user", req.user.id);
@@ -594,14 +778,20 @@ app.post("/api/mfa/enable", requireAuth, async (req, res) => {
 });
 
 app.get("/api/me", requireAuth, async (req, res) => {
-  const row = (await pool.query(`SELECT id, org_id, email, full_name, role, mfa_enabled, active FROM users WHERE id=$1 AND org_id=$2`, [req.user.id, req.user.org_id])).rows[0];
-  res.json({ user: safeUser(row || req.user), roles, permissionKeys, defaultPermissions });
+  const row = (await pool.query(
+    `SELECT id, org_id, email, full_name, role, mfa_secret, mfa_enabled, must_change_password, active
+     FROM users WHERE id=$1 AND org_id=$2`,
+    [req.user.id, req.user.org_id]
+  )).rows[0];
+  const user = safeUser(row || req.user);
+  const mfaSetup = row && !row.mfa_enabled ? { secret: row.mfa_secret } : null;
+  res.json({ user, mfaSetup, roles, permissionKeys, defaultPermissions });
 });
 
 // Admin APIs
 app.get("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
   const rows = (await pool.query(
-    `SELECT u.id, u.email, u.full_name, u.role, u.active, u.mfa_enabled, u.created_at, u.modified_at,
+    `SELECT u.id, u.email, u.full_name, u.role, u.active, u.mfa_enabled, u.must_change_password, u.password_changed_at, u.last_invite_email_at, u.created_at, u.modified_at,
             mu.full_name AS modified_by_name, iu.full_name AS invited_by_name
      FROM users u
      LEFT JOIN users mu ON mu.id = u.modified_by
@@ -619,19 +809,44 @@ app.post("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async 
   const role = roles.includes(req.body?.role) ? req.body.role : "read_only";
   const initialPassword = String(req.body?.initialPassword || "").trim();
   if (!firstName || !lastName || !email || !initialPassword) return res.status(400).json({ error: "missing_fields", message: "First name, last name, email, and initial password are required." });
-  if (initialPassword.length < 10) return res.status(400).json({ error: "weak_password", message: "Initial password must be at least 10 characters." });
+  const pwdErrors = validateStrongPassword(initialPassword);
+  if (pwdErrors.length) return res.status(400).json({ error: "weak_password", message: strongPasswordMessage(pwdErrors) });
   const existing = (await pool.query(`SELECT id FROM users WHERE org_id=$1 AND lower(email)=lower($2)`, [req.user.org_id, email])).rows[0];
   if (existing) return res.status(409).json({ error: "user_exists", message: "A user with this email already exists in your organization." });
   const hash = await bcrypt.hash(initialPassword, 12);
   const secret = speakeasy.generateSecret({ name: `TherapyAgent:${email}`, issuer: "TherapyAgent" });
+  const fullName = `${firstName} ${lastName}`.trim();
   const row = (await pool.query(
-    `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active, invited_by, invited_at)
-     VALUES ($1,$2,$3,$4,$5,$6,false,true,$7,now())
-     RETURNING id, email, full_name, role, active, mfa_enabled, created_at`,
-    [req.user.org_id, email, `${firstName} ${lastName}`.trim(), hash, role, secret.base32, req.user.id]
+    `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, must_change_password, active, invited_by, invited_at)
+     VALUES ($1,$2,$3,$4,$5,$6,false,true,true,$7,now())
+     RETURNING id, email, full_name, role, active, mfa_enabled, must_change_password, created_at`,
+    [req.user.org_id, email, fullName, hash, role, secret.base32, req.user.id]
   )).rows[0];
   await audit(req, "admin_user_created", "user", row.id, { role });
-  res.json({ user: row, invite: { email, initialPassword, mfaSetupKey: secret.base32, otpauth_url: secret.otpauth_url, message: "Share this invite through your approved secure channel. Email sending can be wired after SendGrid/HIPAA mail flow is approved." } });
+
+  const mail = inviteEmailContent({ fullName, email, initialPassword });
+  let emailResult = { sent: false, reason: "SMTP not attempted" };
+  try {
+    emailResult = await sendSmtpMail({ to: email, ...mail });
+    if (emailResult.sent) {
+      await pool.query(`UPDATE users SET last_invite_email_at=now() WHERE id=$1 AND org_id=$2`, [row.id, req.user.org_id]);
+    }
+  } catch (e) {
+    console.error("[invite-email]", e.message);
+    emailResult = { sent: false, reason: e.message };
+  }
+
+  res.json({
+    user: row,
+    invite: {
+      email,
+      emailSent: Boolean(emailResult.sent),
+      emailError: emailResult.sent ? null : emailResult.reason,
+      message: emailResult.sent
+        ? "Invitation email sent. The user must change the temporary password at first login."
+        : "User created, but invitation email could not be sent. Check SMTP settings or share the login details through an approved secure channel."
+    }
+  });
 });
 
 app.patch("/api/admin/users/:id", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
@@ -651,12 +866,32 @@ app.patch("/api/admin/users/:id", requireAuth, requireMfa, allow("org_admin"), a
 
 app.post("/api/admin/users/:id/reset-password", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
   const initialPassword = String(req.body?.initialPassword || "").trim();
-  if (initialPassword.length < 10) return res.status(400).json({ error: "weak_password", message: "Password must be at least 10 characters." });
+  const pwdErrors = validateStrongPassword(initialPassword);
+  if (pwdErrors.length) return res.status(400).json({ error: "weak_password", message: strongPasswordMessage(pwdErrors) });
   const hash = await bcrypt.hash(initialPassword, 12);
-  const row = (await pool.query(`UPDATE users SET password_hash=$1, modified_by=$2, modified_at=now() WHERE id=$3 AND org_id=$4 RETURNING id, email, full_name`, [hash, req.user.id, req.params.id, req.user.org_id])).rows[0];
+  const row = (await pool.query(
+    `UPDATE users
+     SET password_hash=$1, must_change_password=true, password_changed_at=NULL, modified_by=$2, modified_at=now()
+     WHERE id=$3 AND org_id=$4
+     RETURNING id, email, full_name`,
+    [hash, req.user.id, req.params.id, req.user.org_id]
+  )).rows[0];
   if (!row) return res.status(404).json({ error: "user_not_found", message: "User not found." });
   await audit(req, "admin_password_reset", "user", row.id);
-  res.json({ ok: true, user: row, temporaryPassword: initialPassword });
+
+  const mail = resetEmailContent({ fullName: row.full_name, email: row.email, temporaryPassword: initialPassword });
+  let emailResult = { sent: false, reason: "SMTP not attempted" };
+  try {
+    emailResult = await sendSmtpMail({ to: row.email, ...mail });
+    if (emailResult.sent) {
+      await pool.query(`UPDATE users SET last_invite_email_at=now() WHERE id=$1 AND org_id=$2`, [row.id, req.user.org_id]);
+    }
+  } catch (e) {
+    console.error("[reset-email]", e.message);
+    emailResult = { sent: false, reason: e.message };
+  }
+
+  res.json({ ok: true, user: row, emailSent: Boolean(emailResult.sent), emailError: emailResult.sent ? null : emailResult.reason });
 });
 
 app.get("/api/admin/role-permissions", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {

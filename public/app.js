@@ -125,6 +125,25 @@ function patientName(row) { return row.first_name && row.last_name ? `${row.firs
 function fullPatientName(p) { return `${p.first_name || ""} ${p.last_name || ""}`.trim(); }
 function isAdmin() { return currentUser?.role === "org_admin"; }
 
+function passwordRuleErrors(password = "") {
+  const errors = [];
+  if (String(password).length < 10) errors.push("at least 10 characters");
+  if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
+  if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
+  if (!/[0-9]/.test(password)) errors.push("one number");
+  if (!/[^A-Za-z0-9]/.test(password)) errors.push("one special character");
+  return errors;
+}
+function passwordRulesMessage() {
+  return "Password must be at least 10 characters and include uppercase, lowercase, number, and special character.";
+}
+function validatePasswordFields(password, confirmPassword) {
+  const errors = passwordRuleErrors(password);
+  if (errors.length) return passwordRulesMessage();
+  if (password !== confirmPassword) return "Passwords do not match.";
+  return "";
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
@@ -166,12 +185,130 @@ function setAuthenticatedUI() {
   $("#welcomeUser") && ($("#welcomeUser").textContent = currentUser ? `Welcome ${currentUser.full_name || currentUser.name || currentUser.email}` : "Welcome");
   $$(".public-section").forEach(s => s.hidden = !!currentUser);
   $("#workspace") && ($("#workspace").hidden = !currentUser);
+  renderMfaOptionalBanner();
   if (currentUser) panel("dashboard");
 }
 function logout() { token = ""; currentUser = null; localStorage.removeItem("ta_token"); setAuthenticatedUI(); openAuth("login"); }
 
+function renderMfaOptionalBanner() {
+  let banner = document.getElementById("mfaOptionalBanner");
+  if (!currentUser || currentUser.mfa_enabled || currentUser.must_change_password) {
+    if (banner) banner.remove();
+    return;
+  }
+  const workspace = $("#workspace");
+  if (!workspace) return;
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "mfaOptionalBanner";
+    banner.className = "notice";
+    banner.style.gridColumn = "1 / -1";
+    banner.style.marginBottom = "14px";
+    workspace.prepend(banner);
+  }
+  const setupKey = currentUser.mfaSetup?.secret || "";
+  banner.innerHTML = `
+    <strong>MFA is optional but recommended.</strong>
+    <p style="margin:8px 0 10px">
+      To enable MFA, open Google Authenticator, Microsoft Authenticator, or Authy,
+      choose <b>Add account</b>, then choose <b>Enter setup key manually</b>.
+    </p>
+    ${setupKey ? `<code>${escapeHtml(setupKey)}</code>` : `<p>Setup key is not available. Ask your admin to reset MFA for this account.</p>`}
+    <div class="form-actions">
+      <label style="max-width:260px">6-digit MFA code
+        <input id="mfaOptionalTotp" inputmode="numeric" placeholder="123456">
+      </label>
+      <button class="btn small" id="enableOptionalMfa" type="button">Enable MFA</button>
+      <span id="mfaOptionalMsg" style="font-weight:700"></span>
+    </div>
+  `;
+  $("#enableOptionalMfa")?.addEventListener("click", async () => {
+    const msg = $("#mfaOptionalMsg");
+    const totp = $("#mfaOptionalTotp")?.value || "";
+    if (!totp.trim()) {
+      msg.textContent = "Enter the 6-digit code from your authenticator app.";
+      return;
+    }
+    try {
+      const out = await api("/api/mfa/enable", {
+        method: "POST",
+        body: JSON.stringify({ totp })
+      });
+      token = out.token;
+      localStorage.setItem("ta_token", token);
+      currentUser = { ...(out.user || {}), mfaSetup: null };
+      setAuthenticatedUI();
+    } catch (e) {
+      msg.textContent = e.message;
+    }
+  });
+}
+
+function showPasswordChangeRequiredModal() {
+  if (!currentUser?.must_change_password) return;
+  let wrap = document.getElementById("changePasswordRequiredModal");
+  if (wrap) return;
+  wrap = document.createElement("div");
+  wrap.id = "changePasswordRequiredModal";
+  wrap.className = "modal show";
+  wrap.setAttribute("aria-hidden", "false");
+  wrap.innerHTML = `
+    <div class="modal-card" style="max-width:620px;padding:30px">
+      <h2>Change temporary password</h2>
+      <p class="notice">Your administrator created this account with a temporary password. You must choose a new password before accessing the workspace.</p>
+      <form id="firstLoginPasswordForm" class="auth-form">
+        <label>Current temporary password
+          <input name="currentPassword" type="password" required autocomplete="current-password">
+        </label>
+        <label>New password
+          <input name="newPassword" type="password" required minlength="10" autocomplete="new-password">
+        </label>
+        <label>Confirm new password
+          <input name="confirmPassword" type="password" required minlength="10" autocomplete="new-password">
+        </label>
+        <small>${passwordRulesMessage()}</small>
+        <div class="form-actions">
+          <button class="btn">Change password</button>
+          <button class="btn secondary" type="button" id="firstLoginLogout">Logoff</button>
+        </div>
+        <div class="message" id="firstLoginPasswordMsg"></div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  wrap.querySelector("#firstLoginLogout").onclick = logout;
+  wrap.querySelector("#firstLoginPasswordForm").onsubmit = async e => {
+    e.preventDefault();
+    const msg = wrap.querySelector("#firstLoginPasswordMsg");
+    const currentPassword = e.target.currentPassword.value;
+    const newPassword = e.target.newPassword.value;
+    const confirmPassword = e.target.confirmPassword.value;
+    const validation = validatePasswordFields(newPassword, confirmPassword);
+    if (validation) return setMessage(msg, validation, "error");
+    try {
+      const out = await api("/api/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+      });
+      token = out.token;
+      localStorage.setItem("ta_token", token);
+      currentUser = { ...(out.user || {}), mfaSetup: currentUser?.mfaSetup || null };
+      setMessage(msg, out.message || "Password changed successfully.", "success");
+      setTimeout(async () => {
+        wrap.remove();
+        setAuthenticatedUI();
+        await loadPatients();
+        await refreshDashboard();
+      }, 700);
+    } catch (err) {
+      setMessage(msg, err.message, "error");
+    }
+  };
+}
+
 function panel(id) {
   if (!currentUser && id !== "dashboard") return openAuth("login");
+  if (currentUser?.must_change_password && id !== "dashboard") return showPasswordChangeRequiredModal();
   $$(".sidebar button").forEach(b => b.classList.toggle("active", b.dataset.panel === id));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
   if (id === "patients") loadPatients();
@@ -184,15 +321,19 @@ async function initAuth() {
   if (!token) { setAuthenticatedUI(); return; }
   try {
     const out = await api("/api/me");
-    currentUser = out.user;
+    currentUser = { ...(out.user || {}), mfaSetup: out.mfaSetup || null };
     setAuthenticatedUI();
+    if (currentUser.must_change_password) {
+      showPasswordChangeRequiredModal();
+      return;
+    }
     await loadPatients();
     await refreshDashboard();
   } catch (e) { logout(); }
 }
 
 async function loadPatients() {
-  if (!token) return;
+  if (!token || currentUser?.must_change_password) return;
   try {
     const out = await api("/api/patients");
     patients = (out.patients || []).map(p => ({ ...p, full_name: fullPatientName(p) }));
@@ -478,8 +619,8 @@ function renderRoleSelects() { $$(".roleSelect").forEach(s => s.innerHTML = role
 function renderAdminUsers() {
   const mount = $("#adminUserList");
   if (!mount) return;
-  mount.innerHTML = tableHtml(["Name", "Email", "Role", "Active", "MFA", "Created", "Modified", "Actions"], orgUsers.map(u => [
-    escapeHtml(u.full_name), escapeHtml(u.email), `<select data-user-role="${u.id}">${roles.map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select>`, `<input type="checkbox" data-user-active="${u.id}" ${u.active ? "checked" : ""}>`, u.mfa_enabled ? "Yes" : "No", fmtDate(u.created_at), u.modified_at ? fmtDate(u.modified_at) : "", `<button class="link-btn" data-save-user="${u.id}">Save</button> <button class="link-btn" data-reset-user="${u.id}">Reset Password</button>`
+  mount.innerHTML = tableHtml(["Name", "Email", "Role", "Active", "MFA", "Must Change Pwd", "Created", "Modified", "Actions"], orgUsers.map(u => [
+    escapeHtml(u.full_name), escapeHtml(u.email), `<select data-user-role="${u.id}">${roles.map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select>`, `<input type="checkbox" data-user-active="${u.id}" ${u.active ? "checked" : ""}>`, u.mfa_enabled ? "Yes" : "No", u.must_change_password ? "Yes" : "No", fmtDate(u.created_at), u.modified_at ? fmtDate(u.modified_at) : "", `<button class="link-btn" data-save-user="${u.id}">Save</button> <button class="link-btn" data-reset-user="${u.id}">Reset Password</button>`
   ]));
   $$(`[data-save-user]`, mount).forEach(b => b.onclick = () => saveAdminUser(b.dataset.saveUser));
   $$(`[data-reset-user]`, mount).forEach(b => b.onclick = () => resetAdminPassword(b.dataset.resetUser));
@@ -488,10 +629,42 @@ async function saveAdminUser(id) {
   try { await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify({ role: $(`[data-user-role="${id}"]`).value, active: $(`[data-user-active="${id}"]`).checked }) }); await loadAdmin(); } catch (e) { alert(e.message); }
 }
 async function resetAdminPassword(id) {
-  const initialPassword = prompt("Enter temporary password, at least 10 characters");
-  if (!initialPassword) return;
-  try { const out = await api(`/api/admin/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ initialPassword }) }); alert(`Password reset for ${out.user.email}. Temporary password: ${out.temporaryPassword}`); } catch (e) { alert(e.message); }
+  const wrap = document.createElement("div");
+  wrap.className = "modal show";
+  wrap.innerHTML = `
+    <div class="modal-card" style="max-width:520px;padding:28px">
+      <button class="x" type="button" aria-label="Close">×</button>
+      <h2>Reset Password</h2>
+      <p class="notice">Enter a temporary password. The user will receive it by email if SMTP is configured and must change it at next login.</p>
+      <form id="resetPasswordForm" class="auth-form">
+        <label>Temporary password<input name="initialPassword" type="password" required minlength="10" autocomplete="new-password"></label>
+        <label>Confirm temporary password<input name="confirmPassword" type="password" required minlength="10" autocomplete="new-password"></label>
+        <small>${passwordRulesMessage()}</small>
+        <div class="form-actions"><button class="btn">Reset password</button><button class="btn secondary" type="button" data-cancel-reset>Cancel</button></div>
+        <div class="message" id="resetPasswordMsg"></div>
+      </form>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector(".x").onclick = close;
+  wrap.querySelector("[data-cancel-reset]").onclick = close;
+  wrap.querySelector("#resetPasswordForm").onsubmit = async e => {
+    e.preventDefault();
+    const initialPassword = e.target.initialPassword.value;
+    const confirmPassword = e.target.confirmPassword.value;
+    const msg = wrap.querySelector("#resetPasswordMsg");
+    const validation = validatePasswordFields(initialPassword, confirmPassword);
+    if (validation) return setMessage(msg, validation, "error");
+    try {
+      const out = await api(`/api/admin/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ initialPassword }) });
+      const mailMsg = out.emailSent ? "Temporary password email sent." : `Password reset, but email was not sent: ${out.emailError || "SMTP not configured"}.`;
+      setMessage(msg, `Password reset for ${out.user.email}. ${mailMsg}`, out.emailSent ? "success" : "warning");
+      await loadAdmin();
+      setTimeout(close, 1800);
+    } catch (e) { setMessage(msg, e.message, "error"); }
+  };
 }
+
 async function loadRoleMatrix() {
   try { const out = await api("/api/admin/role-permissions"); roleMatrix = out; renderRoleMatrix(); } catch (e) { console.warn(e.message); }
 }
@@ -507,6 +680,7 @@ async function saveRoleMatrix() {
 }
 
 async function refreshDashboard() {
+  if (currentUser?.must_change_password) return;
   $("#metricPatients") && ($("#metricPatients").textContent = String(patients.length));
   let drafts = 0, reviews = 0;
   for (const key of Object.keys(resourceDefs)) {
@@ -584,9 +758,16 @@ $("#loginForm")?.addEventListener("submit", async e => {
   try {
     setAuthMessage("Checking credentials...", "info");
     const out = await api("/api/login", { method: "POST", body: JSON.stringify(formBody(e.target)) });
-    token = out.token; localStorage.setItem("ta_token", token); currentUser = out.user;
+    token = out.token; localStorage.setItem("ta_token", token); currentUser = { ...(out.user || {}), mfaSetup: out.mfaSetup || null };
     setAuthMessage(out.message || `Welcome ${out.user.full_name}.`, "success");
-    closeAuth(); setAuthenticatedUI(); await loadPatients(); await refreshDashboard();
+    closeAuth();
+    setAuthenticatedUI();
+    if (currentUser.must_change_password) {
+      showPasswordChangeRequiredModal();
+      return;
+    }
+    await loadPatients();
+    await refreshDashboard();
   } catch (err) { setAuthMessage(err.message, "error"); }
 });
 $("#forgotForm")?.addEventListener("submit", async e => {
@@ -601,10 +782,20 @@ $("#patientForm")?.addEventListener("submit", async e => {
 });
 $("#adminAddUserForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  try {
-    const out = await api("/api/admin/users", { method: "POST", body: JSON.stringify(formBody(e.target)) });
+  const body = formBody(e.target);
+  const validation = passwordRuleErrors(body.initialPassword || "").length ? passwordRulesMessage() : "";
+  if (validation) {
     $("#inviteOutput").hidden = false;
-    $("#inviteOutput").textContent = `User created. Share through approved secure channel. Login: ${out.invite.email}; Temp password: ${out.invite.initialPassword}; MFA setup key: ${out.invite.mfaSetupKey}`;
+    $("#inviteOutput").textContent = validation;
+    return;
+  }
+  try {
+    const out = await api("/api/admin/users", { method: "POST", body: JSON.stringify(body) });
+    $("#inviteOutput").hidden = false;
+    const emailMsg = out.invite.emailSent
+      ? "Invitation email sent with the login link and temporary password."
+      : `User created, but email was not sent: ${out.invite.emailError || "SMTP is not configured"}.`;
+    $("#inviteOutput").textContent = `${emailMsg} Login: ${out.invite.email}. The user must change the temporary password at first login. MFA is optional.`;
     e.target.reset(); await loadAdmin();
   } catch (err) { alert(err.message); }
 });
