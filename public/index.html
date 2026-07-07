@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TherapyAgent | AI Therapy Documentation Workspace</title>
+  <meta name="description" content="AI-assisted HIPAA-conscious therapy documentation workspace for ABA and I/DD service organizations.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">TA</div>
+      <div>
+        <strong>TherapyAgent</strong>
+        <span>AI documentation for ABA & I/DD providers</span>
+      </div>
+    </div>
+    <nav>
+      <a href="#workspace">Workspace</a>
+      <a href="#agents">Agents</a>
+      <a href="#compliance">Compliance</a>
+      <button id="openAuth" class="btn small">Register / Login</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="pill">Voice-first • Multi-tenant • Role-secured</div>
+        <h1>Turn therapy conversations into structured session notes, behavior logs, plans, and reports.</h1>
+        <p>TherapyAgent helps BCBAs, supervisors, therapists, and RBTs capture the right information while the work is happening, then uses AI agents to draft documentation for clinician review.</p>
+        <div class="hero-actions">
+          <button class="btn" id="heroDemo">Open demo workspace</button>
+          <a class="btn secondary" href="#compliance">Review security model</a>
+        </div>
+      </div>
+      <div class="hero-card">
+        <div class="voice-head">
+          <span class="pulse"></span>
+          <strong>Voice capture</strong>
+          <em>Browser speech mode</em>
+        </div>
+        <p class="quote">“Client completed matching task with verbal prompts. Two elopement attempts during transition. Used visual schedule and differential reinforcement…”</p>
+        <div class="mapped">
+          <span>Session note</span>
+          <span>Behavior ABC</span>
+          <span>Progress report</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace" id="workspace">
+      <aside class="sidebar">
+        <h3>Workspace</h3>
+        <button data-panel="dashboard" class="active">Dashboard</button>
+        <button data-panel="patients">Patients</button>
+        <button data-panel="session">Session Log</button>
+        <button data-panel="behavior">Behavior Event</button>
+        <button data-panel="plan">Therapy Plan</button>
+        <button data-panel="reports">AI Reports</button>
+        <button data-panel="admin">Admin & Roles</button>
+      </aside>
+
+      <section class="panel active" id="dashboard">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Today</p>
+            <h2>Clinical documentation command center</h2>
+          </div>
+          <button class="btn small" id="seedDemo">Seed demo data</button>
+        </div>
+        <div class="metric-grid">
+          <div class="metric"><span>12</span><label>Sessions to complete</label></div>
+          <div class="metric"><span>4</span><label>Behavior events pending review</label></div>
+          <div class="metric"><span>3</span><label>Plan renewals this week</label></div>
+          <div class="metric"><span>100%</span><label>Audit trail coverage</label></div>
+        </div>
+        <div class="cards">
+          <article>
+            <h3>Session documentation agent</h3>
+            <p>Listens to staff narration and maps details into structured activity logs, interventions, response, progress, and follow-up tasks.</p>
+          </article>
+          <article>
+            <h3>BCBA review queue</h3>
+            <p>AI drafts reports, but the BCBA approves. Every generated note remains traceable back to source entries.</p>
+          </article>
+          <article>
+            <h3>Organization isolation</h3>
+            <p>Every patient, plan, note, and audit event is scoped to one organization with role-based access rules.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="patients">
+        <div class="panel-head"><div><p class="eyebrow">Patient records</p><h2>HIPAA-conscious patient registry</h2></div></div>
+        <form id="patientForm" class="form-grid">
+          <input name="first_name" placeholder="First name" required>
+          <input name="last_name" placeholder="Last name" required>
+          <input name="date_of_birth" placeholder="DOB" type="date">
+          <input name="external_id" placeholder="MRN / external ID">
+          <input name="guardian_name" placeholder="Guardian name">
+          <input name="diagnosis" placeholder="Diagnosis / program">
+          <button class="btn">Add patient</button>
+        </form>
+        <div id="patientList" class="list"></div>
+      </section>
+
+      <section class="panel" id="session">
+        <div class="panel-head">
+          <div><p class="eyebrow">Voice-assisted form</p><h2>Session / activity log</h2></div>
+          <button class="btn small mic" data-target="progress_notes">Start voice</button>
+        </div>
+        <form id="sessionForm" class="form-grid long">
+          <select name="patient_id" class="patientSelect"></select>
+          <input name="session_date" type="date">
+          <input name="start_time" type="time">
+          <input name="end_time" type="time">
+          <input name="location" placeholder="Location">
+          <input name="service_code" placeholder="Service code">
+          <textarea name="activities" placeholder="Activities performed"></textarea>
+          <textarea name="interventions_used" placeholder="Interventions used"></textarea>
+          <textarea name="response_to_intervention" placeholder="Response to intervention"></textarea>
+          <textarea name="progress_notes" id="progress_notes" placeholder="Voice or type raw session note"></textarea>
+          <button class="btn">Save session log</button>
+        </form>
+      </section>
+
+      <section class="panel" id="behavior">
+        <div class="panel-head">
+          <div><p class="eyebrow">ABC data</p><h2>Behavior event log</h2></div>
+          <button class="btn small mic" data-target="behavior_voice">Start voice</button>
+        </div>
+        <form id="behaviorForm" class="form-grid long">
+          <select name="patient_id" class="patientSelect"></select>
+          <input name="location" placeholder="Location">
+          <input name="intensity" type="number" min="1" max="5" placeholder="Intensity 1-5">
+          <input name="duration_seconds" type="number" placeholder="Duration seconds">
+          <textarea name="antecedent" placeholder="Antecedent"></textarea>
+          <textarea name="behavior" placeholder="Behavior observed" required></textarea>
+          <textarea name="consequence" placeholder="Consequence"></textarea>
+          <textarea id="behavior_voice" name="notes" placeholder="Voice or type additional notes"></textarea>
+          <button class="btn">Save behavior event</button>
+        </form>
+      </section>
+
+      <section class="panel" id="plan">
+        <div class="panel-head"><div><p class="eyebrow">BCBA owned</p><h2>Therapy / behavior support plan</h2></div></div>
+        <form id="planForm" class="form-grid long">
+          <select name="patient_id" class="patientSelect"></select>
+          <input name="title" placeholder="Plan title">
+          <input name="plan_type" placeholder="Plan type" value="behavior_support">
+          <textarea name="goals" placeholder='Goals JSON, e.g. [{"name":"Transitions","measure":"80% independence"}]'></textarea>
+          <textarea name="interventions" placeholder='Interventions JSON'></textarea>
+          <textarea name="restrictions" placeholder='Restrictions / contraindications JSON'></textarea>
+          <button class="btn">Save therapy plan</button>
+        </form>
+      </section>
+
+      <section class="panel" id="reports">
+        <div class="panel-head"><div><p class="eyebrow">AI drafting</p><h2>Generate review-ready report</h2></div></div>
+        <div class="notice">AI output is a draft. A qualified clinician must review, edit, and sign before use in care, billing, or compliance records.</div>
+        <form id="reportForm" class="form-grid long">
+          <select name="patient_id" class="patientSelect"></select>
+          <textarea name="note" placeholder="Paste or dictate raw notes to summarize"></textarea>
+          <button class="btn">Draft session summary</button>
+        </form>
+        <pre id="reportOutput" class="output"></pre>
+      </section>
+
+      <section class="panel" id="admin">
+        <div class="panel-head"><div><p class="eyebrow">Access control</p><h2>Organization, roles, and MFA</h2></div></div>
+        <div class="cards">
+          <article><h3>Org Admin</h3><p>Manage organization, users, roles, MFA enforcement, and audit reviews.</p></article>
+          <article><h3>BCBA / Supervisor</h3><p>Manage plans, review notes, approve reports, and access assigned patient records.</p></article>
+          <article><h3>Therapist / RBT</h3><p>Log sessions and behavior events for assigned patients with limited plan visibility.</p></article>
+        </div>
+      </section>
+    </section>
+
+    <section class="agents" id="agents">
+      <p class="eyebrow">AI agent suite</p>
+      <h2>Many agents, one governed clinical workflow.</h2>
+      <div class="agent-grid">
+        <article><span>01</span><h3>Voice Intake Agent</h3><p>Captures spoken notes and places facts into the right form fields.</p></article>
+        <article><span>02</span><h3>Session Note Agent</h3><p>Drafts structured therapy notes from raw staff entries for review.</p></article>
+        <article><span>03</span><h3>Behavior ABC Agent</h3><p>Extracts antecedent, behavior, consequence, intensity, duration, location, and suspected function.</p></article>
+        <article><span>04</span><h3>Plan Assistant</h3><p>Turns BCBA guidance into draft goals, interventions, measurement criteria, and review reminders.</p></article>
+        <article><span>05</span><h3>QA & Compliance Agent</h3><p>Flags missing signatures, late notes, gaps in required fields, and inconsistent billing support.</p></article>
+        <article><span>06</span><h3>Report Writer</h3><p>Drafts monthly progress, incident summaries, and caregiver/provider reports with source traceability.</p></article>
+      </div>
+    </section>
+
+    <section class="compliance" id="compliance">
+      <p class="eyebrow">Compliance posture</p>
+      <h2>Built for HIPAA-conscious operations, not casual note-taking.</h2>
+      <div class="compliance-grid">
+        <div><strong>MFA required</strong><span>All users accessing PHI must enable MFA before production access.</span></div>
+        <div><strong>Tenant isolation</strong><span>Every query is scoped by organization ID and role.</span></div>
+        <div><strong>Audit logging</strong><span>Patient access, note creation, AI draft generation, and admin actions are logged.</span></div>
+        <div><strong>Minimum necessary</strong><span>Roles expose only the records and workflows required for the user’s job.</span></div>
+        <div><strong>AI safety gate</strong><span>PHI is not sent to an external LLM unless a BAA/Healthcare Addendum is signed and explicitly enabled.</span></div>
+        <div><strong>Human approval</strong><span>AI drafts are never final clinical records until reviewed and signed by an authorized clinician.</span></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="authModal" aria-hidden="true">
+    <div class="modal-card">
+      <button class="x" id="closeAuth">×</button>
+      <h2>Register first organization admin</h2>
+      <p>First user becomes the organization admin. MFA setup is returned by the API and should be enforced before production use.</p>
+      <form id="registerForm" class="form-grid long">
+        <input name="organizationName" placeholder="Organization name" required>
+        <input name="adminName" placeholder="Admin full name" required>
+        <input name="email" type="email" placeholder="Admin email" required>
+        <input name="password" type="password" placeholder="Password, min 10 chars" required>
+        <button class="btn">Create organization</button>
+      </form>
+      <hr>
+      <h3>Login</h3>
+      <form id="loginForm" class="form-grid long">
+        <input name="email" type="email" placeholder="Email">
+        <input name="password" type="password" placeholder="Password">
+        <input name="totp" placeholder="MFA code if enabled">
+        <button class="btn secondary">Login</button>
+      </form>
+      <h3>Enable MFA</h3>
+      <p>After registration, scan the returned otpauth URL or enter the base32 secret in an authenticator app, then verify the 6-digit code.</p>
+      <form id="mfaForm" class="form-grid long">
+        <input name="totp" placeholder="6-digit MFA code">
+        <button class="btn">Enable MFA</button>
+      </form>
+      <pre id="authOutput" class="output"></pre>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
