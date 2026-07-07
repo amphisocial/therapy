@@ -1,0 +1,27 @@
+/* UI/security hotfix: no JavaScript mutation observer. */
+body.app-authenticated .public-section,
+body.app-authenticated #publicNav {
+  display: none !important;
+  visibility: hidden !important;
+}
+body.app-authenticated #workspace {
+  display: grid !important;
+  visibility: visible !important;
+}
+body.app-authenticated #userNav {
+  display: flex !important;
+  visibility: visible !important;
+}
+.secure-password-card {
+  width: min(520px, 94vw);
+  padding: 28px;
+}
+.secure-password-card h3 {
+  margin: 0 0 8px;
+  color: var(--blue-900);
+}
+.secure-password-help {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
