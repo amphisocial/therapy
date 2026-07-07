@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import speakeasy from "speakeasy";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -210,7 +211,7 @@ app.post("/api/register", async (req, res) => {
 
     await client.query("COMMIT");
 
-    const mfaQrDataUrl = "";
+    const mfaQrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
     const token = sign(user);
     const message = createdNewOrg
       ? "Account created. Scan the QR code and verify MFA before logging in. You are the organization admin."

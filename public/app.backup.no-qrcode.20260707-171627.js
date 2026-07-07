@@ -130,18 +130,9 @@ $("#registerForm")?.addEventListener("submit", async e => {
     localStorage.setItem("ta_token", token);
 
     $("#mfaSetupPanel").hidden = false;
-    const qrUrl = out.mfaSetup?.qrDataUrl || "";
-    if ($("#mfaQr")) {
-      $("#mfaQr").style.display = qrUrl ? "block" : "none";
-      $("#mfaQr").src = qrUrl;
-    }
+    $("#mfaQr").src = out.mfaSetup?.qrDataUrl || "";
     $("#mfaSecret").textContent = out.mfaSetup?.secret || "";
-    setAuthMessage(
-      qrUrl
-        ? (out.message || "Account created. Scan the MFA QR code and verify the 6-digit code.")
-        : (out.message || "Account created. QR generation is disabled right now. Manually enter the setup key in your Authenticator app, then verify the 6-digit code."),
-      out.status === "pending_approval" ? "warning" : "success"
-    );
+    setAuthMessage(out.message || "Account created. Scan the MFA QR code and verify the 6-digit code.", out.status === "pending_approval" ? "warning" : "success");
   } catch (err) {
     setAuthMessage(friendlyError(err), "error");
   }
