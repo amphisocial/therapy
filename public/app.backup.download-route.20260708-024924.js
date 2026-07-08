@@ -397,7 +397,7 @@ async function loadAttachments(resource, entityId) {
 async function downloadAttachment(id, filename = "attachment") {
   if (!token) throw new Error("Please log in again.");
 
-  const res = await fetch(`/api/attachment-download/${encodeURIComponent(id)}`, {
+  const res = await fetch(`/api/attachments/${encodeURIComponent(id)}/download`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`

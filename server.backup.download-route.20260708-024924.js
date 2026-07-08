@@ -1366,17 +1366,6 @@ app.post("/api/admin/attachment-setup", requireAuth, requireMfa, allow("org_admi
   }
 });
 
-
-app.get("/api/attachment-download/:id", requireAuth, requireMfa, async (req, res) => {
-  try {
-    const file = await loadAttachmentRecord(req, req.params.id);
-    if (!file) return res.status(404).json({ error: "file_not_found", message: "File not found." });
-    streamS3Object(file.s3_key, res, file);
-  } catch (e) {
-    res.status(e.status || 500).json({ error: "download_failed", message: e.message });
-  }
-});
-
 app.get("/api/attachments/:resource/:id", requireAuth, requireMfa, async (req, res) => {
   const cfg = getResourceConfig(req.params.resource);
   if (!cfg) return res.status(404).json({ error: "unknown_resource", message: "Unknown attachment resource." });
