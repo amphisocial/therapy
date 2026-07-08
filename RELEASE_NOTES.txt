@@ -1,31 +1,42 @@
-TherapyAgent consolidated build
+TherapyAgent S3 Attachment Update
+=================================
 
-This is the single source-of-truth build that merges:
-1. MFA optional for admin-invited users
-2. SMTP invite emails using .env
-3. First-login password change enforcement
-4. Password validation rules
-5. Public marketing page separated from logged-in workspace
+This build adds org-level S3 attachment setup and record-level file uploads.
 
-Included files:
-- package.json
-- server.js
-- db/schema.sql
-- public/index.html
-- public/workspace.html
-- public/app.js
-- public/styles.css
+Included:
+- Admin & Roles -> Attachment Setup tab.
+- Attach File toggle is disabled by default for each org.
+- Enabling Attach File initializes org S3 prefix/folder markers automatically.
+- Session, Behavior, Plan, Incident, and Report detail forms include Attach File upload.
+- Attachments are saved under the org S3 prefix and tracked in Postgres.
+- Reports include "Save report file to S3" to store a text-file copy of the report output.
+- No new npm packages required. The server uses Node built-ins and AWS SigV4.
 
-Important behavior:
-- Public site is /
-- Logged-in app is /workspace.html
-- Admin-created users can log in with email + temporary password without MFA.
-- MFA is optional by default. Set MFA_REQUIRED=true only if you want to enforce it.
-- Admin-created users must change the temporary password at first login.
-- SMTP invite emails use SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_FROM_NAME, SMTP_SECURE, SMTP_STARTTLS, and SITE_ORIGIN from .env.
-- Database schema adds users.must_change_password, users.password_changed_at, users.last_invite_email_at.
+Required .env:
+- S3_BUCKET=your-bucket-name
+- S3_REGION=us-east-1
+- AWS_ACCESS_KEY_ID=...
+- AWS_SECRET_ACCESS_KEY=...
 
-Recommended Git workflow:
-- Apply this ZIP to your Windows local repo, not just the server.
-- Commit and push from Windows.
-- On the server, run git pull, psql -f db/schema.sql, and pm2 restart therapyagent --update-env.
+Optional .env:
+- AWS_SESSION_TOKEN=...
+- S3_PREFIX_ROOT=orgs
+- S3_KMS_KEY_ID=arn:aws:kms:...
+- S3_MAX_UPLOAD_MB=25
+- S3_ENDPOINT=https://s3.amazonaws.com
+- S3_FORCE_PATH_STYLE=false
+
+Database changes:
+- organizations.attachments_enabled
+- organizations.s3_bucket
+- organizations.s3_region
+- organizations.s3_prefix
+- organizations.s3_setup_at
+- organizations.s3_setup_by
+- files table for S3 metadata
+
+Deploy database:
+set -a
+source .env
+set +a
+psql "$DATABASE_URL" -f db/schema.sql

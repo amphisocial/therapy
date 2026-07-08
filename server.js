@@ -12,10 +12,13 @@ import pg from "pg";
 import speakeasy from "speakeasy";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import crypto from "node:crypto";
+import https from "node:https";
+import http from "node:http";
 import net from "node:net";
 import tls from "node:tls";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
@@ -30,6 +33,16 @@ const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const SMTP_FROM = process.env.SMTP_FROM || process.env.EMAIL_FROM || SMTP_USER || "no-reply@therapyagent.athenabot.ai";
 const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || "TherapyAgent";
+const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID || "";
+const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY || "";
+const AWS_SESSION_TOKEN = process.env.AWS_SESSION_TOKEN || "";
+const S3_BUCKET = process.env.S3_BUCKET || "";
+const S3_REGION = process.env.S3_REGION || "us-east-1";
+const S3_ENDPOINT = process.env.S3_ENDPOINT || "";
+const S3_PREFIX_ROOT = (process.env.S3_PREFIX_ROOT || "orgs").replace(/^\/+|\/+$/g, "") || "orgs";
+const S3_KMS_KEY_ID = process.env.S3_KMS_KEY_ID || "";
+const S3_MAX_UPLOAD_MB = Number(process.env.S3_MAX_UPLOAD_MB || 25);
+const S3_FORCE_PATH_STYLE = String(process.env.S3_FORCE_PATH_STYLE || "false").toLowerCase() === "true";
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is required.");
@@ -50,7 +63,7 @@ const app = express();
 app.set("trust proxy", true);
 app.use(helmet({ crossOriginEmbedderPolicy: false, contentSecurityPolicy: false }));
 app.use(cors({ origin: SITE_ORIGIN.split(",").map(s => s.trim()), credentials: true }));
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({ limit: `${Math.ceil(S3_MAX_UPLOAD_MB * 1.5) + 2}mb` }));
 app.use(cookieParser());
 app.use(express.static(join(__dirname, "public")));
 app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
@@ -63,7 +76,7 @@ const permissionKeys = [
   "plans.view", "plans.edit", "plans.delete", "plans.review",
   "incidents.view", "incidents.edit", "incidents.delete", "incidents.review",
   "reports.view", "reports.edit", "reports.delete", "reports.review",
-  "admin.users", "admin.roles", "audit.view"
+  "admin.users", "admin.roles", "attachments.setup", "attachments.upload", "audit.view"
 ];
 
 const defaultPermissions = {
@@ -398,6 +411,203 @@ function cleanValue(column, value, cfg) {
   }
   if (["injury", "restraint"].includes(column)) return toBoolean(value);
   return value ?? null;
+}
+
+
+function encodeS3Key(key) {
+  return String(key).split("/").map(part => encodeURIComponent(part)).join("/");
+}
+
+function s3UrlForKey(bucket, key) {
+  if (S3_ENDPOINT) {
+    const base = new URL(S3_ENDPOINT);
+    if (S3_FORCE_PATH_STYLE) {
+      base.pathname = `${base.pathname.replace(/\/$/, "")}/${bucket}/${encodeS3Key(key)}`;
+      return base;
+    }
+    base.hostname = `${bucket}.${base.hostname}`;
+    base.pathname = `${base.pathname.replace(/\/$/, "")}/${encodeS3Key(key)}`;
+    return base;
+  }
+  return new URL(`https://${bucket}.s3.${S3_REGION}.amazonaws.com/${encodeS3Key(key)}`);
+}
+
+function hashHex(data) {
+  return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+function hmac(key, data, encoding) {
+  return crypto.createHmac("sha256", key).update(data, "utf8").digest(encoding);
+}
+
+function signingKey(secret, dateStamp, region, service) {
+  const kDate = hmac(`AWS4${secret}`, dateStamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, service);
+  return hmac(kService, "aws4_request");
+}
+
+function amzDates(now = new Date()) {
+  const iso = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  return { amzDate: iso, dateStamp: iso.slice(0, 8) };
+}
+
+function s3Configured() {
+  return Boolean(S3_BUCKET && S3_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY);
+}
+
+function signedS3Options(method, key, body = Buffer.alloc(0), extraHeaders = {}) {
+  if (!s3Configured()) {
+    throw Object.assign(new Error("S3 is not fully configured. Set S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY in .env."), { status: 400 });
+  }
+  const url = s3UrlForKey(S3_BUCKET, key);
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body || "");
+  const payloadHash = hashHex(payload);
+  const { amzDate, dateStamp } = amzDates();
+  const headers = {
+    host: url.host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...extraHeaders
+  };
+  if (AWS_SESSION_TOKEN) headers["x-amz-security-token"] = AWS_SESSION_TOKEN;
+
+  const normalizedHeaders = {};
+  for (const [k, v] of Object.entries(headers)) normalizedHeaders[k.toLowerCase()] = String(v).trim();
+  const signedHeaderNames = Object.keys(normalizedHeaders).sort();
+  const canonicalHeaders = signedHeaderNames.map(k => `${k}:${normalizedHeaders[k]}\n`).join("");
+  const canonicalQuery = [...url.searchParams.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
+  const canonicalRequest = [method, url.pathname, canonicalQuery, canonicalHeaders, signedHeaderNames.join(";"), payloadHash].join("\n");
+  const credentialScope = `${dateStamp}/${S3_REGION}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, hashHex(Buffer.from(canonicalRequest))].join("\n");
+  const signature = hmac(signingKey(AWS_SECRET_ACCESS_KEY, dateStamp, S3_REGION, "s3"), stringToSign, "hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${AWS_ACCESS_KEY_ID}/${credentialScope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`;
+  const finalHeaders = { ...headers, Authorization: authorization, "Content-Length": String(payload.length) };
+  return { url, headers: finalHeaders, body: payload };
+}
+
+async function s3PutObject(key, body = Buffer.alloc(0), options = {}) {
+  const headers = { "content-type": options.contentType || "application/octet-stream" };
+  if (S3_KMS_KEY_ID) {
+    headers["x-amz-server-side-encryption"] = "aws:kms";
+    headers["x-amz-server-side-encryption-aws-kms-key-id"] = S3_KMS_KEY_ID;
+  }
+  const signed = signedS3Options("PUT", key, body, headers);
+  const client = signed.url.protocol === "http:" ? http : https;
+  return new Promise((resolve, reject) => {
+    const req = client.request(signed.url, { method: "PUT", headers: signed.headers }, res => {
+      const chunks = [];
+      res.on("data", d => chunks.push(d));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        if (res.statusCode >= 200 && res.statusCode < 300) return resolve({ statusCode: res.statusCode, headers: res.headers, body: text });
+        reject(Object.assign(new Error(`S3 PUT failed ${res.statusCode}: ${text.slice(0, 500)}`), { status: 502 }));
+      });
+    });
+    req.on("error", reject);
+    req.write(signed.body);
+    req.end();
+  });
+}
+
+function streamS3Object(key, res, file) {
+  const signed = signedS3Options("GET", key, Buffer.alloc(0), {});
+  const client = signed.url.protocol === "http:" ? http : https;
+  const req = client.request(signed.url, { method: "GET", headers: signed.headers }, s3res => {
+    if (s3res.statusCode < 200 || s3res.statusCode >= 300) {
+      const chunks = [];
+      s3res.on("data", d => chunks.push(d));
+      s3res.on("end", () => res.status(502).json({ error: "s3_download_failed", message: Buffer.concat(chunks).toString("utf8").slice(0, 500) || "Could not download file from S3." }));
+      return;
+    }
+    res.setHeader("Content-Type", file.mime_type || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${String(file.original_filename || "file").replace(/["\\]/g, "")}"`);
+    s3res.pipe(res);
+  });
+  req.on("error", e => res.status(502).json({ error: "s3_download_failed", message: e.message }));
+  req.end();
+}
+
+function orgS3Prefix(orgId) {
+  return `${S3_PREFIX_ROOT}/${orgId}`.replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function safeFileName(name = "file") {
+  const clean = String(name || "file").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return clean || "file";
+}
+
+function attachmentCategory(resource) {
+  return resourceConfigs[resource] ? resource : String(resource || "general").replace(/[^a-z0-9_-]/gi, "");
+}
+
+function base64ToBuffer(value = "") {
+  const text = String(value || "");
+  const b64 = text.includes(",") ? text.split(",").pop() : text;
+  return Buffer.from(b64, "base64");
+}
+
+async function getOrgAttachmentSetup(orgId) {
+  return (await pool.query(
+    `SELECT o.attachments_enabled, o.s3_bucket, o.s3_region, o.s3_prefix, o.s3_setup_at, o.s3_setup_by, u.full_name AS s3_setup_by_name
+     FROM organizations o
+     LEFT JOIN users u ON u.id = o.s3_setup_by
+     WHERE o.id=$1`,
+    [orgId]
+  )).rows[0];
+}
+
+function setupJson(row) {
+  return {
+    attachments_enabled: Boolean(row?.attachments_enabled),
+    s3_bucket: row?.s3_bucket || "",
+    s3_region: row?.s3_region || "",
+    s3_prefix: row?.s3_prefix || "",
+    s3_setup_at: row?.s3_setup_at || null,
+    s3_setup_by_name: row?.s3_setup_by_name || "",
+    env_configured: s3Configured(),
+    env_bucket: S3_BUCKET || "",
+    env_region: S3_REGION || "",
+    max_upload_mb: S3_MAX_UPLOAD_MB
+  };
+}
+
+async function requireAttachmentsEnabled(req) {
+  const setup = await getOrgAttachmentSetup(req.user.org_id);
+  if (!setup?.attachments_enabled) {
+    throw Object.assign(new Error("Attachments are not enabled for this organization. Ask an Org Admin to enable Admin & Roles → Attachment Setup."), { status: 403 });
+  }
+  return setup;
+}
+
+async function createOrgS3Markers(prefix) {
+  const folders = [
+    `${prefix}/`,
+    `${prefix}/attachments/`,
+    `${prefix}/attachments/sessions/`,
+    `${prefix}/attachments/behaviors/`,
+    `${prefix}/attachments/plans/`,
+    `${prefix}/attachments/incidents/`,
+    `${prefix}/attachments/reports/`,
+    `${prefix}/reports/`
+  ];
+  for (const key of folders) await s3PutObject(key, Buffer.alloc(0), { contentType: "application/x-directory" });
+}
+
+async function loadAttachmentRecord(req, id) {
+  return (await pool.query(`SELECT * FROM files WHERE id=$1 AND org_id=$2 AND deleted_at IS NULL`, [id, req.user.org_id])).rows[0];
+}
+
+async function insertFileRecord(req, { patient_id, category, entity_type, entity_id, original_filename, s3_key, mime_type, size_bytes, sha256 }) {
+  return (await pool.query(
+    `INSERT INTO files (org_id, patient_id, uploaded_by, category, entity_type, entity_id, original_filename, s3_bucket, s3_key, s3_region, mime_type, size_bytes, sha256, kms_key_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     RETURNING id, patient_id, category, entity_type, entity_id, original_filename, s3_key, mime_type, size_bytes, sha256, created_at`,
+    [req.user.org_id, patient_id || null, req.user.id, category, entity_type || null, entity_id || null, original_filename, S3_BUCKET, s3_key, S3_REGION, mime_type || null, size_bytes || null, sha256 || null, S3_KMS_KEY_ID || null]
+  )).rows[0];
 }
 
 function getResourceConfig(type) {
@@ -1006,6 +1216,166 @@ for (const [resourceKey, cfg0] of Object.entries(resourceConfigs)) {
     catch (e) { res.status(e.status || 500).json({ error: "delete_failed", message: e.message }); }
   });
 }
+
+
+// Attachment setup and file APIs
+app.get("/api/attachment-setup", requireAuth, requireMfa, async (req, res) => {
+  const setup = await getOrgAttachmentSetup(req.user.org_id);
+  res.json({ setup: setupJson(setup) });
+});
+
+app.get("/api/admin/attachment-setup", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const setup = await getOrgAttachmentSetup(req.user.org_id);
+  res.json({ setup: setupJson(setup) });
+});
+
+app.post("/api/admin/attachment-setup", requireAuth, requireMfa, allow("org_admin"), async (req, res) => {
+  const enabled = toBoolean(req.body?.enabled);
+  if (!enabled) {
+    const row = (await pool.query(
+      `UPDATE organizations SET attachments_enabled=false WHERE id=$1 RETURNING attachments_enabled, s3_bucket, s3_region, s3_prefix, s3_setup_at`,
+      [req.user.org_id]
+    )).rows[0];
+    await audit(req, "attachments_disabled", "organization", req.user.org_id);
+    return res.json({ setup: setupJson(row), message: "File attachments disabled for this organization. Existing S3 files are not deleted." });
+  }
+
+  if (!s3Configured()) {
+    return res.status(400).json({
+      error: "s3_not_configured",
+      message: "S3 is not fully configured. Set S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY in .env, then restart the app."
+    });
+  }
+
+  const prefix = orgS3Prefix(req.user.org_id);
+  try {
+    await createOrgS3Markers(prefix);
+    const row = (await pool.query(
+      `UPDATE organizations
+       SET attachments_enabled=true, s3_bucket=$1, s3_region=$2, s3_prefix=$3, s3_setup_at=now(), s3_setup_by=$4
+       WHERE id=$5
+       RETURNING attachments_enabled, s3_bucket, s3_region, s3_prefix, s3_setup_at`,
+      [S3_BUCKET, S3_REGION, prefix, req.user.id, req.user.org_id]
+    )).rows[0];
+    await audit(req, "attachments_enabled", "organization", req.user.org_id, { s3_bucket: S3_BUCKET, s3_region: S3_REGION, s3_prefix: prefix });
+    res.json({ setup: setupJson(row), message: `File attachments enabled. S3 prefix initialized: ${prefix}/` });
+  } catch (e) {
+    console.error("[attachment-setup]", e.message);
+    res.status(e.status || 500).json({ error: "attachment_setup_failed", message: e.message });
+  }
+});
+
+app.get("/api/attachments/:resource/:id", requireAuth, requireMfa, async (req, res) => {
+  const cfg = getResourceConfig(req.params.resource);
+  if (!cfg) return res.status(404).json({ error: "unknown_resource", message: "Unknown attachment resource." });
+  const record = await getRecord(req, cfg, req.params.id);
+  if (!record) return res.status(404).json({ error: "not_found", message: "Record not found." });
+  const rows = (await pool.query(
+    `SELECT f.id, f.original_filename, f.mime_type, f.size_bytes, f.category, f.entity_type, f.entity_id, f.created_at, f.sha256,
+            u.full_name AS uploaded_by_name
+     FROM files f
+     LEFT JOIN users u ON u.id=f.uploaded_by
+     WHERE f.org_id=$1 AND f.entity_type=$2 AND f.entity_id=$3 AND f.deleted_at IS NULL
+     ORDER BY f.created_at DESC`,
+    [req.user.org_id, cfg.singular, req.params.id]
+  )).rows;
+  res.json({ files: rows });
+});
+
+app.post("/api/attachments/upload", requireAuth, requireMfa, async (req, res) => {
+  try {
+    const setup = await requireAttachmentsEnabled(req);
+    const resource = attachmentCategory(req.body?.resource);
+    const cfg = getResourceConfig(resource);
+    if (!cfg) return res.status(404).json({ error: "unknown_resource", message: "Unknown attachment resource." });
+    const entityId = String(req.body?.entity_id || "").trim();
+    if (!entityId) return res.status(400).json({ error: "entity_required", message: "Save the record before attaching files." });
+    const record = await getRecord(req, cfg, entityId);
+    if (!record) return res.status(404).json({ error: "not_found", message: "Record not found." });
+
+    const originalName = safeFileName(req.body?.file_name || "attachment");
+    const mimeType = String(req.body?.mime_type || "application/octet-stream").slice(0, 120);
+    const buffer = base64ToBuffer(req.body?.content_base64 || "");
+    if (!buffer.length) return res.status(400).json({ error: "empty_file", message: "The selected file is empty or could not be read." });
+    const maxBytes = S3_MAX_UPLOAD_MB * 1024 * 1024;
+    if (buffer.length > maxBytes) return res.status(413).json({ error: "file_too_large", message: `File is larger than ${S3_MAX_UPLOAD_MB} MB.` });
+
+    const sha = hashHex(buffer);
+    const idPart = crypto.randomUUID();
+    const key = `${setup.s3_prefix || orgS3Prefix(req.user.org_id)}/attachments/${resource}/${entityId}/${idPart}-${originalName}`;
+    await s3PutObject(key, buffer, { contentType: mimeType });
+    const row = await insertFileRecord(req, {
+      patient_id: record.patient_id || null,
+      category: resource,
+      entity_type: cfg.singular,
+      entity_id: entityId,
+      original_filename: originalName,
+      s3_key: key,
+      mime_type: mimeType,
+      size_bytes: buffer.length,
+      sha256: sha
+    });
+    await audit(req, "file_uploaded", "file", row.id, { resource, entity_id: entityId, s3_key: key });
+    res.json({ file: row, message: "File uploaded to S3." });
+  } catch (e) {
+    console.error("[attachment-upload]", e.message);
+    res.status(e.status || 500).json({ error: "upload_failed", message: e.message });
+  }
+});
+
+app.get("/api/attachments/:id/download", requireAuth, requireMfa, async (req, res) => {
+  try {
+    const file = await loadAttachmentRecord(req, req.params.id);
+    if (!file) return res.status(404).json({ error: "file_not_found", message: "File not found." });
+    streamS3Object(file.s3_key, res, file);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: "download_failed", message: e.message });
+  }
+});
+
+app.post("/api/reports/:id/save-to-s3", requireAuth, requireMfa, async (req, res) => {
+  try {
+    const setup = await requireAttachmentsEnabled(req);
+    const cfg = getResourceConfig("reports");
+    const report = await getRecord(req, cfg, req.params.id);
+    if (!report) return res.status(404).json({ error: "report_not_found", message: "Report not found." });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const patientLabel = `${report.first_name || "patient"}-${report.last_name || ""}`.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/-+/g, "-");
+    const fileName = safeFileName(`${patientLabel}-${report.report_type || "report"}-${stamp}.txt`);
+    const content = [
+      `TherapyAgent Report`,
+      `Report Type: ${report.report_type || ""}`,
+      `Patient: ${report.first_name || ""} ${report.last_name || ""}`.trim(),
+      `Created: ${report.created_at || ""}`,
+      `Status: ${report.status || ""}`,
+      "",
+      "Prompt / Source Notes:",
+      report.prompt || "",
+      "",
+      "Report Draft:",
+      report.output || ""
+    ].join("\n");
+    const buffer = Buffer.from(content, "utf8");
+    const key = `${setup.s3_prefix || orgS3Prefix(req.user.org_id)}/reports/${req.params.id}/${fileName}`;
+    await s3PutObject(key, buffer, { contentType: "text/plain; charset=utf-8" });
+    const row = await insertFileRecord(req, {
+      patient_id: report.patient_id || null,
+      category: "reports",
+      entity_type: cfg.singular,
+      entity_id: req.params.id,
+      original_filename: fileName,
+      s3_key: key,
+      mime_type: "text/plain",
+      size_bytes: buffer.length,
+      sha256: hashHex(buffer)
+    });
+    await audit(req, "report_saved_to_s3", "file", row.id, { report_id: req.params.id, s3_key: key });
+    res.json({ file: row, message: "Report saved to S3." });
+  } catch (e) {
+    console.error("[report-save-s3]", e.message);
+    res.status(e.status || 500).json({ error: "report_save_failed", message: e.message });
+  }
+});
 
 // Backward-compatible aliases from earlier build.
 app.get("/api/session-logs", requireAuth, requireMfa, async (req, res) => {

@@ -98,6 +98,7 @@
         <div class="tabs" id="adminTabs">
           <button data-admin-tab="users" class="active">Users</button>
           <button data-admin-tab="roles">Role permissions</button>
+          <button data-admin-tab="attachments">Attachment Setup</button>
         </div>
         <div id="adminUsersTab">
           <form id="adminAddUserForm" class="form-card">
@@ -118,6 +119,19 @@
           <div class="notice">Check permissions by role. MVP enforcement still primarily uses role-level controls in the API, but this matrix is stored for the admin model and future fine-grained checks.</div>
           <div id="roleMatrix" class="matrix-wrap"></div>
           <div class="form-actions"><button class="btn" id="saveRoleMatrix">Save role permissions</button></div>
+        </div>
+        <div id="adminAttachmentsTab" hidden>
+          <section class="form-card attachment-setup-card">
+            <h3>Attachment Setup</h3>
+            <p class="muted">Enable file attachments for this organization. When enabled, TherapyAgent initializes the organization prefix inside the S3 bucket configured in <code>.env</code>. S3 folders are virtual, so the app creates marker objects and stores files under the org prefix automatically.</p>
+            <div id="attachmentSetupStatus" class="notice">Loading attachment setup...</div>
+            <div class="form-actions">
+              <label class="check"><input type="checkbox" id="attachmentsEnabledToggle"> Attach File</label>
+              <button class="btn" id="saveAttachmentSetup" type="button">Save Attachment Setup</button>
+              <button class="btn secondary" id="refreshAttachmentSetup" type="button">Refresh</button>
+            </div>
+            <div id="attachmentSetupMsg" class="message"></div>
+          </section>
         </div>
       </section>
     </section>

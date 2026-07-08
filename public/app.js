@@ -4,6 +4,7 @@ let patients = [];
 let organizationMatches = [];
 let orgUsers = [];
 let roleMatrix = null;
+let attachmentSetup = null;
 let activePatient = null;
 let patientSummary = null;
 let activeVoice = null;
@@ -259,6 +260,150 @@ function renderMfaOptionalBanner() {
   });
 }
 
+
+async function loadAttachmentSetup() {
+  if (!token || currentUser?.must_change_password || !isWorkspacePage) return null;
+  try {
+    const out = await api(isAdmin() ? "/api/admin/attachment-setup" : "/api/attachment-setup");
+    attachmentSetup = out.setup || null;
+  } catch (e) {
+    attachmentSetup = null;
+    console.warn(e.message);
+  }
+  return attachmentSetup;
+}
+
+function renderAttachmentSetup() {
+  const status = $("#attachmentSetupStatus");
+  const toggle = $("#attachmentsEnabledToggle");
+  const msg = $("#attachmentSetupMsg");
+  if (!status || !toggle) return;
+  const setup = attachmentSetup || {};
+  toggle.checked = Boolean(setup.attachments_enabled);
+  const configured = setup.env_configured;
+  const cls = setup.attachments_enabled ? "s3-ok" : configured ? "s3-off" : "s3-error";
+  status.className = `notice ${cls}`;
+  status.innerHTML = setup.attachments_enabled
+    ? `<strong>Attachments enabled.</strong><br>S3 bucket: <code class="inline-code">${escapeHtml(setup.s3_bucket || setup.env_bucket || "")}</code><br>Region: <code class="inline-code">${escapeHtml(setup.s3_region || setup.env_region || "")}</code><br>Org prefix: <code class="inline-code">${escapeHtml(setup.s3_prefix || "")}/</code><br>Setup: ${setup.s3_setup_at ? fmtDate(setup.s3_setup_at) : ""} ${setup.s3_setup_by_name ? `by ${escapeHtml(setup.s3_setup_by_name)}` : ""}`
+    : configured
+      ? `<strong>Attachments disabled.</strong><br>Toggle Attach File to Yes and Save. The app will initialize this org's prefix inside <code class="inline-code">${escapeHtml(setup.env_bucket || "S3_BUCKET")}</code>.`
+      : `<strong>S3 is not configured.</strong><br>Set <code class="inline-code">S3_BUCKET</code>, <code class="inline-code">S3_REGION</code>, <code class="inline-code">AWS_ACCESS_KEY_ID</code>, and <code class="inline-code">AWS_SECRET_ACCESS_KEY</code> in .env, then restart the app.`;
+  setMessage(msg, "");
+}
+
+async function saveAttachmentSetup() {
+  const msg = $("#attachmentSetupMsg");
+  const enabled = Boolean($("#attachmentsEnabledToggle")?.checked);
+  try {
+    setMessage(msg, enabled ? "Initializing S3 prefix for this organization..." : "Disabling attachments...", "info");
+    const out = await api("/api/admin/attachment-setup", { method: "POST", body: JSON.stringify({ enabled }) });
+    attachmentSetup = out.setup || null;
+    renderAttachmentSetup();
+    setMessage(msg, out.message || "Attachment setup saved.", "success");
+  } catch (e) {
+    setMessage(msg, e.message, "error");
+  }
+}
+
+function attachmentSectionHtml(resource, item = {}) {
+  const id = item.id || "";
+  const setup = attachmentSetup || {};
+  const enabled = Boolean(setup.attachments_enabled);
+  if (!id) {
+    return `<section class="attachment-box"><h4>Attachments</h4><p class="muted">Save this record before attaching files.</p></section>`;
+  }
+  if (!enabled) {
+    return `<section class="attachment-box"><h4>Attachments</h4><p class="muted">Attachments are disabled for this organization. Org Admin can enable this under Admin & Roles → Attachment Setup.</p></section>`;
+  }
+  const reportButton = resource === "reports"
+    ? `<div class="report-s3-row"><button class="btn small secondary" type="button" data-save-report-s3="${id}">Save report file to S3</button><span class="muted">Creates a text file copy of this report in the org S3 location.</span></div>`
+    : "";
+  return `<section class="attachment-box" data-attachment-box="${resource}" data-entity-id="${id}">
+    <h4>Attachments</h4>
+    <div class="attachment-actions">
+      <label>Attach File<input type="file" data-attach-file="${resource}" data-entity-id="${id}"></label>
+      <button class="btn small" type="button" data-upload-attachment="${resource}" data-entity-id="${id}">Upload to S3</button>
+      <span class="attachment-pill">${escapeHtml(setup.s3_prefix || "org S3 prefix")}</span>
+    </div>
+    ${reportButton}
+    <div class="message" id="${resource}AttachmentMsg"></div>
+    <div class="attachment-list" id="${resource}AttachmentList">Loading attachments...</div>
+  </section>`;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadAttachment(resource, entityId, root = document) {
+  const msg = $(`#${resource}AttachmentMsg`, root) || $(`#${resource}AttachmentMsg`);
+  const input = root.querySelector(`[data-attach-file="${resource}"][data-entity-id="${entityId}"]`);
+  const file = input?.files?.[0];
+  if (!file) return setMessage(msg, "Choose a file first.", "error");
+  try {
+    setMessage(msg, `Uploading ${file.name}...`, "info");
+    const content_base64 = await fileToBase64(file);
+    const out = await api("/api/attachments/upload", {
+      method: "POST",
+      body: JSON.stringify({
+        resource,
+        entity_id: entityId,
+        file_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64
+      })
+    });
+    setMessage(msg, out.message || "File uploaded.", "success");
+    input.value = "";
+    await loadAttachments(resource, entityId);
+  } catch (e) {
+    setMessage(msg, e.message, "error");
+  }
+}
+
+async function loadAttachments(resource, entityId) {
+  const mount = $(`#${resource}AttachmentList`);
+  if (!mount) return;
+  try {
+    const out = await api(`/api/attachments/${resource}/${entityId}`);
+    const files = out.files || [];
+    mount.innerHTML = tableHtml(["File", "Type", "Size", "Uploaded By", "Date", "Action"], files.map(f => [
+      `<span class="file-name-cell">${escapeHtml(f.original_filename)}</span>`,
+      escapeHtml(f.mime_type || ""),
+      escapeHtml(formatBytes(f.size_bytes || 0)),
+      escapeHtml(f.uploaded_by_name || ""),
+      fmtDate(f.created_at),
+      `<a class="link-btn" href="/api/attachments/${f.id}/download" target="_blank" rel="noopener">Download</a>`
+    ]));
+  } catch (e) {
+    mount.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function saveReportFileToS3(id) {
+  const msg = $("#reportsAttachmentMsg");
+  try {
+    setMessage(msg, "Saving report file to S3...", "info");
+    const out = await api(`/api/reports/${id}/save-to-s3`, { method: "POST", body: JSON.stringify({}) });
+    setMessage(msg, out.message || "Report saved to S3.", "success");
+    await loadAttachments("reports", id);
+  } catch (e) {
+    setMessage(msg, e.message, "error");
+  }
+}
+
 function showPasswordChangeRequiredModal() {
   if (!currentUser?.must_change_password) return;
   let wrap = document.getElementById("changePasswordRequiredModal");
@@ -351,6 +496,7 @@ async function initAuth() {
       return;
     }
 
+    await loadAttachmentSetup();
     setAuthenticatedUI();
     if (currentUser.must_change_password) {
       showPasswordChangeRequiredModal();
@@ -488,6 +634,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
     <form id="${resource}Form" class="form-card resource-form">
       <div class="form-grid">${def.fields.map(f => fieldHtml(f, item, disabled)).join("")}</div>
       <details class="audit-box"><summary>Audit / review details</summary>${auditHtml(item)}</details>
+      ${attachmentSectionHtml(resource, item)}
       <div class="form-actions">
         ${!disabled ? `<button class="btn" data-save-resource="${resource}">${isNew ? "Save" : "Save changes"}</button><button class="btn secondary" type="button" data-cancel-edit="${resource}">Cancel</button>` : ""}
         ${!isNew ? `<button class="btn secondary" type="button" data-submit-review="${resource}">Send for Review</button>` : ""}
@@ -510,6 +657,9 @@ function renderResourceDetail(resource, item = {}, editing = false) {
   detail.querySelector(`[data-reject-review]`)?.addEventListener("click", () => rejectReview(resource, item.id));
   detail.querySelector(`[data-voice-resource]`)?.addEventListener("click", e => { e.preventDefault(); startVoice(resource, def.voiceField, detail); });
   detail.querySelector(`[data-stop-voice]`)?.addEventListener("click", e => { e.preventDefault(); stopVoice(); });
+  detail.querySelector(`[data-upload-attachment]`)?.addEventListener("click", e => { e.preventDefault(); uploadAttachment(resource, item.id, detail); });
+  detail.querySelector(`[data-save-report-s3]`)?.addEventListener("click", e => { e.preventDefault(); saveReportFileToS3(item.id); });
+  if (item.id) loadAttachments(resource, item.id);
 }
 function canActOnReview(item) { return item?.status === "Under Review" && (item.review_assigned_to === currentUser?.id || isAdmin()); }
 function auditHtml(item = {}) {
@@ -649,6 +799,8 @@ async function loadAdmin() {
   renderRoleSelects();
   renderAdminUsers();
   await loadRoleMatrix();
+  await loadAttachmentSetup();
+  renderAttachmentSetup();
 }
 function renderRoleSelects() { $$(".roleSelect").forEach(s => s.innerHTML = roles.map(r => `<option value="${r}">${r}</option>`).join("")); }
 function renderAdminUsers() {
@@ -743,9 +895,17 @@ $("#refreshAll")?.addEventListener("click", async () => { await loadPatients(); 
 $("#refreshInbox")?.addEventListener("click", loadInbox);
 $("#refreshAdmin")?.addEventListener("click", loadAdmin);
 $("#saveRoleMatrix")?.addEventListener("click", saveRoleMatrix);
+$("#saveAttachmentSetup")?.addEventListener("click", saveAttachmentSetup);
+$("#refreshAttachmentSetup")?.addEventListener("click", async () => { await loadAttachmentSetup(); renderAttachmentSetup(); });
 $("#closePatientDetail")?.addEventListener("click", () => { $("#patientDetail").hidden = true; activePatient = null; });
 $$("#patientTabs button").forEach(b => b.onclick = () => renderPatientTab(b.dataset.patientTab));
-$$("#adminTabs button").forEach(b => b.onclick = () => { $$("#adminTabs button").forEach(x => x.classList.toggle("active", x === b)); $("#adminUsersTab").hidden = b.dataset.adminTab !== "users"; $("#adminRolesTab").hidden = b.dataset.adminTab !== "roles"; });
+$$("#adminTabs button").forEach(b => b.onclick = () => {
+  $$("#adminTabs button").forEach(x => x.classList.toggle("active", x === b));
+  $("#adminUsersTab") && ($("#adminUsersTab").hidden = b.dataset.adminTab !== "users");
+  $("#adminRolesTab") && ($("#adminRolesTab").hidden = b.dataset.adminTab !== "roles");
+  $("#adminAttachmentsTab") && ($("#adminAttachmentsTab").hidden = b.dataset.adminTab !== "attachments");
+  if (b.dataset.adminTab === "attachments") renderAttachmentSetup();
+});
 $("#newPatientBtn")?.addEventListener("click", () => { $("#patientForm").hidden = false; $("#patientForm").reset(); });
 $("#cancelPatientBtn")?.addEventListener("click", () => { $("#patientForm").hidden = true; });
 
@@ -800,6 +960,7 @@ $("#loginForm")?.addEventListener("submit", async e => {
       window.location.href = "/workspace.html";
       return;
     }
+    await loadAttachmentSetup();
     setAuthenticatedUI();
     if (currentUser.must_change_password) {
       showPasswordChangeRequiredModal();

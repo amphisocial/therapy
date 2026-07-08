@@ -36,6 +36,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invite_email_at TIMESTAMPTZ;
 
+
+-- Attachment / S3 setup is org-level and disabled by default.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS attachments_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS s3_bucket TEXT;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS s3_region TEXT;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS s3_prefix TEXT;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS s3_setup_at TIMESTAMPTZ;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS s3_setup_by UUID REFERENCES users(id);
+
+
 CREATE TABLE IF NOT EXISTS patients (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -178,6 +188,27 @@ CREATE TABLE IF NOT EXISTS review_history (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  patient_id UUID REFERENCES patients(id) ON DELETE SET NULL,
+  uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id UUID,
+  original_filename TEXT NOT NULL,
+  s3_bucket TEXT NOT NULL,
+  s3_key TEXT NOT NULL,
+  s3_region TEXT,
+  s3_version_id TEXT,
+  mime_type TEXT,
+  size_bytes BIGINT,
+  sha256 TEXT,
+  kms_key_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
+);
+
 -- Existing deployments may already have these tables. Add workflow/audit columns idempotently.
 ALTER TABLE session_logs ADD COLUMN IF NOT EXISTS modified_by UUID REFERENCES users(id);
 ALTER TABLE session_logs ADD COLUMN IF NOT EXISTS modified_at TIMESTAMPTZ;
@@ -236,3 +267,7 @@ CREATE INDEX IF NOT EXISTS idx_therapy_plans_org_patient ON therapy_plans(org_id
 CREATE INDEX IF NOT EXISTS idx_ai_reports_org_patient ON ai_reports(org_id, patient_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_review_history_entity ON review_history(org_id, entity_type, entity_id);
+
+CREATE INDEX IF NOT EXISTS idx_files_org_entity ON files(org_id, entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_files_org_patient ON files(org_id, patient_id);
+CREATE INDEX IF NOT EXISTS idx_files_org_created ON files(org_id, created_at DESC);
