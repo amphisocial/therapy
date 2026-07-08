@@ -378,56 +378,11 @@ async function loadAttachments(resource, entityId) {
       escapeHtml(formatBytes(f.size_bytes || 0)),
       escapeHtml(f.uploaded_by_name || ""),
       fmtDate(f.created_at),
-      `<button class="link-btn" type="button" data-download-attachment="${f.id}" data-filename="${escapeHtml(f.original_filename || "attachment")}">Download</button>`
+      `<a class="link-btn" href="/api/attachments/${f.id}/download" target="_blank" rel="noopener">Download</a>`
     ]));
-    $$("[data-download-attachment]", mount).forEach(b => {
-      b.onclick = async () => {
-        try {
-          await downloadAttachment(b.dataset.downloadAttachment, b.dataset.filename || "attachment");
-        } catch (e) {
-          alert(e.message);
-        }
-      };
-    });
   } catch (e) {
     mount.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
   }
-}
-
-async function downloadAttachment(id, filename = "attachment") {
-  if (!token) throw new Error("Please log in again.");
-
-  const res = await fetch(`/api/attachments/${encodeURIComponent(id)}/download`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  if (!res.ok) {
-    let message = "Download failed.";
-    try {
-      const data = await res.json();
-      message = data.message || data.error || message;
-    } catch {}
-    throw new Error(message);
-  }
-
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-
-  const cd = res.headers.get("Content-Disposition") || "";
-  const match = cd.match(/filename="?([^"]+)"?/i);
-  const downloadName = match?.[1] || filename || "attachment";
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = downloadName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function formatBytes(bytes) {
