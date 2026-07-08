@@ -1,36 +1,71 @@
-# TherapyAgent Compliance / Terms / BAA Update
+# TherapyAgent Angel Therapy Demo Seed
 
-Adds:
-- `public/security-compliance.html`
-- `public/terms.html`
-- `public/business-associate-agreement.html`
-- Visible homepage top-nav links
-- Public registration Terms checkbox
-- Admin user creation Terms attestation checkbox
-- API enforcement for both checkboxes
-- DB fields recording Terms acceptance / admin attestation
-- Legal/compliance page styling
+This package creates a complete demo organization for TherapyAgent.
 
-## Apply
+## Demo organization
 
-From the TherapyAgent repo root:
+- Organization: **Angel Therapy Services**
+- Admin login: **admin@angeltherapy.com**
+- Password for all demo users: **mishratesting**
+
+> Demo-only password intentionally matches the user's request. Do not use this password for production.
+
+## Included demo users
+
+| Email | Role | Password |
+|---|---|---|
+| admin@angeltherapy.com | org_admin | mishratesting |
+| bcba@angeltherapy.com | bcba | mishratesting |
+| supervisor@angeltherapy.com | supervisor | mishratesting |
+| therapist1@angeltherapy.com | therapist | mishratesting |
+| therapist2@angeltherapy.com | therapist | mishratesting |
+| rbt1@angeltherapy.com | rbt | mishratesting |
+| rbt2@angeltherapy.com | rbt | mishratesting |
+| billing@angeltherapy.com | billing_auditor | mishratesting |
+
+## What it loads
+
+- 1 demo org
+- 8 demo users
+- 36 patients
+- 132 session logs
+- 128 behavior events
+- 118 incidents
+- 42 therapy plans
+- 56 AI reports
+
+Attachments are intentionally not seeded.
+
+## Install / run
+
+Upload/unzip this package into the TherapyAgent repo root on the server, usually:
 
 ```bash
-python3 scripts/apply-compliance-terms-update.py
-node --check server.js
-node --check public/app.js
+cd /opt/apps/therapy
+unzip therapyagent-angel-demo-seed.zip
+```
+
+Then run:
+
+```bash
+cd /opt/apps/therapy
+bash demo-seed/run-import.sh
+```
+
+The script uses `.env` and `DATABASE_URL`, then inserts the demo data. It deletes and recreates only the `Angel Therapy Services` demo org, so it can be re-run safely.
+
+## Optional cleanup
+
+```bash
+cd /opt/apps/therapy
 set -a
 source .env
 set +a
-psql "$DATABASE_URL" -f db/schema.sql
-pm2 restart therapyagent --update-env
+psql "$DATABASE_URL" -f demo-seed/cleanup-angel-therapy-demo.sql
 ```
 
-Then test:
-- Homepage top menu: Security & Compliance, BAA Template, Terms
-- Create Account requires Terms checkbox
-- Admin & Roles -> Add user requires admin attestation checkbox
+## Notes
 
-## Counsel review
-
-The Terms and BAA are strong starter templates, not a substitute for legal review before production commercial use.
+- Uses existing app dependencies: `dotenv`, `pg`, `bcryptjs`.
+- Works with the current TherapyAgent schema and optional compliance/terms columns when present.
+- Does not create file attachments or S3 objects.

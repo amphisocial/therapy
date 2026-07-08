@@ -1,0 +1,9 @@
+Name,Email,Role,Password,Notes
+Angela Martin,admin@angeltherapy.com,org_admin,mishratesting,Demo org administrator
+Dr. Maya Patel,bcba@angeltherapy.com,bcba,mishratesting,BCBA clinical reviewer
+Jordan Lee,supervisor@angeltherapy.com,supervisor,mishratesting,Program supervisor
+Emily Chen,therapist1@angeltherapy.com,therapist,mishratesting,Therapist
+Carlos Rivera,therapist2@angeltherapy.com,therapist,mishratesting,Therapist
+Noah Thompson,rbt1@angeltherapy.com,rbt,mishratesting,RBT
+Priya Shah,rbt2@angeltherapy.com,rbt,mishratesting,RBT
+Morgan Brooks,billing@angeltherapy.com,billing_auditor,mishratesting,Billing/audit demo user
