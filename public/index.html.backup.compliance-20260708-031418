@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TherapyAgent | AI Therapy Documentation</title>
+  <meta name="description" content="AI-assisted therapy documentation workspace for ABA and I/DD service organizations.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-page="public">
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">TA</div>
+      <div>
+        <strong>TherapyAgent</strong>
+        <span>AI documentation for ABA & I/DD providers</span>
+      </div>
+    </div>
+    <nav id="publicNav">
+      <a href="/workspace.html">Workspace</a>
+      <a href="#security">Security</a>
+      <button id="openAuth" class="btn small">Login</button>
+    </nav>
+    <div id="userNav" class="user-nav" hidden>
+      <span id="welcomeUser">Welcome</span>
+      <button id="logoutBtn" class="btn small secondary">Logoff</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero public-section">
+      <div class="hero-copy">
+        <div class="pill">Voice-first • Multi-tenant • Review workflow</div>
+        <h1>Turn therapy conversations into structured records.</h1>
+        <p>Capture sessions, behavior events, plans, incidents, and reports with role-based review, status tracking, and full audit context.</p>
+        <div class="hero-actions"><button class="btn" id="heroLogin">Login to workspace</button></div>
+      </div>
+      <div class="hero-card"><strong>Review workflow</strong><p>Draft → Under Review → Reviewed or Rejected → Resubmitted</p></div>
+    </section>
+
+    <section class="compliance public-section" id="security">
+      <p class="eyebrow">Security posture</p>
+      <h2>MFA, audit logging, org isolation, review controls.</h2>
+      <div class="compliance-grid"><div><strong>Workflow</strong><span>Draft records can be sent to another user for review and approval.</span></div><div><strong>Audit</strong><span>Created, modified, reviewed, and rejected metadata stay visible.</span></div></div>
+    </section>
+  </main>
+
+  <div class="modal" id="authModal" aria-hidden="true">
+    <div class="modal-card auth-card">
+      <button class="x" id="closeAuth" aria-label="Close authentication dialog">×</button>
+      <div class="auth-layout">
+        <aside class="auth-side"><p class="eyebrow">Secure access</p><h2>Login or create account.</h2><p>MFA is optional for invited users and recommended for clinical workspaces.</p></aside>
+        <section class="auth-main">
+          <div class="auth-tabs" role="tablist"><button class="auth-tab active" data-auth-screen="login" type="button">Login</button><button class="auth-tab" data-auth-screen="register" type="button">Create Account</button><button class="auth-tab" data-auth-screen="forgot" type="button">Forgot Password</button></div>
+          <div id="authMessage" class="auth-message" aria-live="polite"></div>
+          <section class="auth-screen active" id="auth-login"><h3>Login</h3><form id="loginForm" class="auth-form"><label>Email / Login<input name="email" type="email" required autocomplete="email"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><label>MFA code<input name="totp" inputmode="numeric" placeholder="6-digit code"></label><button class="btn">Login</button></form></section>
+          <section class="auth-screen" id="auth-register"><h3>Create Account</h3><form id="registerForm" class="auth-form"><label>Organization<input id="orgSearch" name="organizationName" list="organizationOptions" required autocomplete="organization"><input id="organizationId" name="organizationId" type="hidden"><datalist id="organizationOptions"></datalist><small id="orgHint">Type at least 2 characters to search or create a new organization.</small></label><div class="two"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label></div><label>Email / Login<input name="email" type="email" required></label><label>Password<input name="password" type="password" required minlength="10"></label><button class="btn">Create account</button></form><div id="mfaSetupPanel" class="mfa-panel" hidden><h4>Enable MFA</h4><p>Add account manually in your Authenticator app using this setup key:</p><code id="mfaSecret"></code><form id="mfaForm" class="auth-form"><label>6-digit MFA code<input name="totp" required inputmode="numeric"></label><button class="btn">Verify MFA</button><button class="btn secondary" type="button" id="goLoginAfterMfa">Go to Login</button></form></div></section>
+          <section class="auth-screen" id="auth-forgot"><h3>Forgot Password</h3><form id="forgotForm" class="auth-form"><label>Email / Login<input name="email" type="email" required></label><button class="btn">Request reset</button></form></section>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

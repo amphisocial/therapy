@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Security & Compliance | TherapyAgent</title>
+  <meta name="description" content="TherapyAgent security, privacy, and HIPAA-ready architecture for therapy documentation workflows.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-page="public">
+  <header class="topbar">
+    <div class="brand"><div class="mark">TA</div><div><strong>TherapyAgent</strong><span>Security & Compliance</span></div></div>
+    <nav id="publicNav"><a href="/">Home</a><a href="/security-compliance.html">Security & Compliance</a><a href="/business-associate-agreement.html">BAA Template</a><a href="/terms.html">Terms</a><a href="/workspace.html">Workspace</a></nav>
+  </header>
+  <main class="legal-page">
+    <section class="legal-hero">
+      <p class="eyebrow">Security & Compliance</p>
+      <h1>HIPAA-ready documentation infrastructure for therapy organizations.</h1>
+      <p>TherapyAgent is designed to support ABA, I/DD, and therapy organizations that need structured documentation, auditability, secure file storage, and responsible clinician-reviewed AI assistance.</p>
+      <p class="notice"><strong>Important:</strong> HIPAA compliance is a shared operational responsibility. TherapyAgent provides technical and contractual controls intended to support covered entities and business associates, but each customer remains responsible for its own HIPAA policies, workforce training, access decisions, risk analysis, and permitted uses of PHI.</p>
+    </section>
+
+    <section class="legal-section">
+      <h2>Security controls currently implemented</h2>
+      <div class="legal-grid">
+        <div><h3>Encryption in transit</h3><p>Production deployments should be served only over HTTPS/TLS. Browser-to-application and application-to-cloud traffic should remain encrypted in transit.</p></div>
+        <div><h3>Encrypted file storage</h3><p>Attachments are stored in AWS S3 with server-side encryption using AWS KMS when <code class="inline-code">S3_KMS_KEY_ID</code> is configured.</p></div>
+        <div><h3>HIPAA-ready AWS storage pattern</h3><p>The storage design uses HIPAA-eligible AWS services when deployed under an appropriate AWS Business Associate Addendum, with S3 bucket policies, KMS encryption, private objects, and least-privilege IAM role access.</p></div>
+        <div><h3>EC2 IAM role credentials</h3><p>The S3 integration supports EC2 instance role credentials, avoiding long-lived AWS secret keys in application configuration.</p></div>
+        <div><h3>Organization isolation</h3><p>Users, patients, records, review history, and files are scoped by organization. Attachments are stored under organization-specific S3 prefixes.</p></div>
+        <div><h3>Role-based access</h3><p>Users are assigned roles such as org admin, BCBA, supervisor, therapist, RBT, billing auditor, and read-only.</p></div>
+        <div><h3>MFA support</h3><p>MFA is available and recommended. The deployment can later enforce MFA using environment configuration.</p></div>
+        <div><h3>Audit logging</h3><p>Key actions such as record creation, updates, review actions, user administration, file upload, and S3 setup are written to audit history.</p></div>
+        <div><h3>Authenticated downloads</h3><p>Attachment downloads require a valid TherapyAgent session token and are streamed through the application after organization-level authorization.</p></div>
+        <div><h3>Clinician-reviewed AI</h3><p>AI assistance drafts documentation for review. TherapyAgent should not be used as an autonomous diagnosis, treatment, or medical necessity determination system.</p></div>
+      </div>
+    </section>
+
+    <section class="legal-section">
+      <h2>HIPAA, BAA, and customer responsibilities</h2>
+      <p>When TherapyAgent handles protected health information for a covered entity, the parties should execute a Business Associate Agreement before production PHI is entered. A draft template is available here: <a href="/business-associate-agreement.html">Business Associate Agreement Template</a>.</p>
+      <ul>
+        <li>Customers are responsible for determining whether they are covered entities or business associates.</li>
+        <li>Customers are responsible for appropriate user provisioning, minimum necessary access, workforce training, patient consent workflows, and local policies.</li>
+        <li>TherapyAgent administrators should add only authorized workforce members or contractors and attest to the Terms for each invited user.</li>
+        <li>Production deployments should include backups, monitoring, incident response procedures, and periodic access reviews.</li>
+      </ul>
+    </section>
+
+    <section class="legal-section">
+      <h2>Procurement-ready documentation</h2>
+      <p>Available or planned materials include Terms and Conditions, BAA template, security overview, encryption architecture, incident response outline, and audit/access-control evidence.</p>
+      <div class="form-actions"><a class="btn" href="/terms.html">View Terms</a><a class="btn secondary" href="/business-associate-agreement.html">View BAA Template</a></div>
+    </section>
+  </main>
+</body>
+</html>

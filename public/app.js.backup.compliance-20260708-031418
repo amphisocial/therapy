@@ -979,10 +979,6 @@ $("#orgSearch")?.addEventListener("change", e => {
 $("#registerForm")?.addEventListener("submit", async e => {
   e.preventDefault();
   const body = formBody(e.target);
-  if (body.termsAccepted !== "on") {
-    setAuthMessage("You must agree to the TherapyAgent Terms and Conditions before creating an account.", "error");
-    return;
-  }
   if (!body.organizationId) delete body.organizationId;
   try {
     setAuthMessage("Creating account and MFA setup key...", "info");
@@ -1032,11 +1028,6 @@ $("#patientForm")?.addEventListener("submit", async e => {
 $("#adminAddUserForm")?.addEventListener("submit", async e => {
   e.preventDefault();
   const body = formBody(e.target);
-  if (body.adminTermsAttested !== "on") {
-    $("#inviteOutput").hidden = false;
-    $("#inviteOutput").textContent = "You must attest that the invited user is authorized and covered by the TherapyAgent Terms and Conditions.";
-    return;
-  }
   const validation = passwordRuleErrors(body.initialPassword || "").length ? passwordRulesMessage() : "";
   if (validation) {
     $("#inviteOutput").hidden = false;

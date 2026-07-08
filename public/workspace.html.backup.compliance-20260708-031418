@@ -20,8 +20,6 @@
       </div>
     </div>
     <div id="userNav" class="user-nav">
-      <a href="/security-compliance.html">Security</a>
-      <a href="/terms.html">Terms</a>
       <span id="welcomeUser">Welcome</span>
       <button id="logoutBtn" class="btn small secondary">Logoff</button>
     </div>
@@ -111,7 +109,6 @@
               <label>Email / Login<input name="email" type="email" required></label>
               <label>Initial password<input name="initialPassword" type="password" required autocomplete="new-password"><small>Minimum 10 chars with uppercase, lowercase, number, and special character.</small></label>
               <label>Role<select name="role" class="roleSelect"></select></label>
-              <label class="check legal-check span-2"><input name="adminTermsAttested" type="checkbox" required> <span>I attest that this user is authorized by our organization to use TherapyAgent and will operate under our organization policies and the <a href="/terms.html" target="_blank" rel="noopener">TherapyAgent Terms and Conditions</a>.</span></label>
             </div>
             <div class="form-actions"><button class="btn">Create user</button></div>
             <div id="inviteOutput" class="notice" hidden></div>

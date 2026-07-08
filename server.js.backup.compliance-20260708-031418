@@ -45,7 +45,6 @@ const S3_PREFIX_ROOT = (process.env.S3_PREFIX_ROOT || "orgs").replace(/^\/+|\/+$
 const S3_KMS_KEY_ID = process.env.S3_KMS_KEY_ID || "";
 const S3_MAX_UPLOAD_MB = Number(process.env.S3_MAX_UPLOAD_MB || 25);
 const S3_FORCE_PATH_STYLE = String(process.env.S3_FORCE_PATH_STYLE || "false").toLowerCase() === "true";
-const TERMS_VERSION = process.env.TERMS_VERSION || "2026-07-07";
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is required.");
@@ -962,7 +961,6 @@ app.get("/api/organizations", async (req, res) => {
 });
 
 app.post("/api/register", async (req, res) => {
-  if (!toBoolean(req.body?.termsAccepted)) return res.status(400).json({ error: "terms_required", message: "You must agree to the TherapyAgent Terms and Conditions before creating an account." });
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "validation_error", message: validationMessage(parsed) });
   const { organizationId, organizationName, firstName, lastName, email, password } = parsed.data;
@@ -998,10 +996,10 @@ app.post("/api/register", async (req, res) => {
     const role = createdNewOrg ? "org_admin" : "read_only";
     const active = createdNewOrg;
     const user = (await client.query(
-      `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active, terms_accepted_at, terms_accepted_ip, terms_accepted_user_agent, terms_version)
-       VALUES ($1,$2,$3,$4,$5,$6,false,$7,now(),$8,$9,$10)
+      `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, active)
+       VALUES ($1,$2,$3,$4,$5,$6,false,$7)
        RETURNING id, org_id, email, full_name, role, mfa_enabled, must_change_password, active`,
-      [org.id, normalizedEmail, fullName, hash, role, secret.base32, active, req.ip, req.get("user-agent") || "", TERMS_VERSION]
+      [org.id, normalizedEmail, fullName, hash, role, secret.base32, active]
     )).rows[0];
     await client.query("COMMIT");
     const token = sign(user);
@@ -1121,7 +1119,6 @@ app.post("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async 
   const email = normalizeEmail(req.body?.email);
   const role = roles.includes(req.body?.role) ? req.body.role : "read_only";
   const initialPassword = String(req.body?.initialPassword || "").trim();
-  if (!toBoolean(req.body?.adminTermsAttested)) return res.status(400).json({ error: "admin_terms_attestation_required", message: "You must attest that the invited user is authorized and covered by the TherapyAgent Terms and Conditions." });
   if (!firstName || !lastName || !email || !initialPassword) return res.status(400).json({ error: "missing_fields", message: "First name, last name, email, and initial password are required." });
   const pwdErrors = validateStrongPassword(initialPassword);
   if (pwdErrors.length) return res.status(400).json({ error: "weak_password", message: strongPasswordMessage(pwdErrors) });
@@ -1131,10 +1128,10 @@ app.post("/api/admin/users", requireAuth, requireMfa, allow("org_admin"), async 
   const secret = speakeasy.generateSecret({ name: `TherapyAgent:${email}`, issuer: "TherapyAgent" });
   const fullName = `${firstName} ${lastName}`.trim();
   const row = (await pool.query(
-    `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, must_change_password, active, invited_by, invited_at, terms_accepted_by_admin_id, terms_admin_attested_at, terms_admin_attestation, terms_version)
-     VALUES ($1,$2,$3,$4,$5,$6,false,true,true,$7,now(),$8,now(),$9,$10)
+    `INSERT INTO users (org_id, email, full_name, password_hash, role, mfa_secret, mfa_enabled, must_change_password, active, invited_by, invited_at)
+     VALUES ($1,$2,$3,$4,$5,$6,false,true,true,$7,now())
      RETURNING id, email, full_name, role, active, mfa_enabled, must_change_password, created_at`,
-    [req.user.org_id, email, fullName, hash, role, secret.base32, req.user.id, req.user.id, "Organization admin attested that this user is authorized and covered by the TherapyAgent Terms and Conditions.", TERMS_VERSION]
+    [req.user.org_id, email, fullName, hash, role, secret.base32, req.user.id]
   )).rows[0];
   await audit(req, "admin_user_created", "user", row.id, { role });
 
