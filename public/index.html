@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TherapyAgent | Clinical Workspace</title>
+  <title>TherapyAgent | AI Therapy Documentation</title>
   <meta name="description" content="AI-assisted therapy documentation workspace for ABA and I/DD service organizations.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body data-page="public">
   <header class="topbar">
     <div class="brand">
       <div class="mark">TA</div>
       <div>
         <strong>TherapyAgent</strong>
-        <span>Clinical documentation workspace</span>
+        <span>AI documentation for ABA & I/DD providers</span>
       </div>
     </div>
     <nav id="publicNav">
-      <a href="#workspace">Workspace</a>
+      <a href="/workspace.html">Workspace</a>
       <a href="#security">Security</a>
       <button id="openAuth" class="btn small">Login</button>
     </nav>
@@ -39,102 +39,6 @@
         <div class="hero-actions"><button class="btn" id="heroLogin">Login to workspace</button></div>
       </div>
       <div class="hero-card"><strong>Review workflow</strong><p>Draft → Under Review → Reviewed or Rejected → Resubmitted</p></div>
-    </section>
-
-    <section class="workspace" id="workspace">
-      <aside class="sidebar">
-        <h3>Workspace</h3>
-        <button data-panel="dashboard" class="active">Dashboard</button>
-        <button data-panel="patients">Patients</button>
-        <button data-panel="inbox">Inbox</button>
-        <button data-panel="sessions">Session Log</button>
-        <button data-panel="behaviors">Behavior Events</button>
-        <button data-panel="plans">Therapy Plans</button>
-        <button data-panel="incidents">Incidents</button>
-        <button data-panel="reports">AI Reports</button>
-        <button data-panel="admin">Admin & Roles</button>
-      </aside>
-
-      <section class="panel active" id="dashboard">
-        <div class="panel-head"><div><p class="eyebrow">Today</p><h2>Workspace dashboard</h2></div><button class="btn small" id="refreshAll">Refresh</button></div>
-        <div class="metric-grid">
-          <div class="metric"><span id="metricPatients">0</span><label>Patients</label></div>
-          <div class="metric"><span id="metricInbox">0</span><label>Inbox items</label></div>
-          <div class="metric"><span id="metricDrafts">0</span><label>Draft records</label></div>
-          <div class="metric"><span id="metricReviews">0</span><label>Under review</label></div>
-        </div>
-        <div class="notice">Open any page on the left. Lists show saved items; double-click a row or click Open to view/edit. New creates a fresh form.</div>
-      </section>
-
-      <section class="panel" id="patients">
-        <div class="panel-head"><div><p class="eyebrow">Patient records</p><h2>Patients</h2></div><button class="btn small" id="newPatientBtn">New patient</button></div>
-        <form id="patientForm" class="form-card" hidden>
-          <div class="form-grid">
-            <label>First name<input name="first_name" required></label>
-            <label>Last name<input name="last_name" required></label>
-            <label>Date of birth<input name="date_of_birth" type="date"></label>
-            <label>MRN / External ID<input name="external_id"></label>
-            <label>Guardian name<input name="guardian_name"></label>
-            <label>Guardian phone<input name="guardian_phone"></label>
-            <label>Guardian email<input name="guardian_email" type="email"></label>
-            <label>Diagnosis / Program<input name="diagnosis"></label>
-            <label class="span-2">Insurance<textarea name="insurance"></textarea></label>
-          </div>
-          <div class="form-actions"><button class="btn">Save patient</button><button class="btn secondary" type="button" id="cancelPatientBtn">Cancel</button></div>
-        </form>
-        <div id="patientList" class="table-wrap"></div>
-        <section id="patientDetail" class="detail-panel" hidden>
-          <div class="panel-head"><div><p class="eyebrow">Patient detail</p><h2 id="patientDetailTitle">Patient</h2></div><button class="btn small secondary" id="closePatientDetail">Back to patients</button></div>
-          <div class="tabs" id="patientTabs">
-            <button data-patient-tab="sessions" class="active">Sessions</button>
-            <button data-patient-tab="behaviors">Behaviors</button>
-            <button data-patient-tab="plans">Plans</button>
-            <button data-patient-tab="reports">Reports</button>
-            <button data-patient-tab="incidents">Incidents</button>
-          </div>
-          <div id="patientTabContent" class="table-wrap"></div>
-        </section>
-      </section>
-
-      <section class="panel" id="inbox">
-        <div class="panel-head"><div><p class="eyebrow">Review workflow</p><h2>Inbox</h2></div><button class="btn small" id="refreshInbox">Refresh inbox</button></div>
-        <h3>Pending my review</h3><div id="assignedInbox" class="table-wrap"></div>
-        <h3>Returned to me</h3><div id="returnedInbox" class="table-wrap"></div>
-      </section>
-
-      <section class="panel resource-panel" id="sessions" data-resource="sessions"><div class="resourceMount"></div></section>
-      <section class="panel resource-panel" id="behaviors" data-resource="behaviors"><div class="resourceMount"></div></section>
-      <section class="panel resource-panel" id="plans" data-resource="plans"><div class="resourceMount"></div></section>
-      <section class="panel resource-panel" id="incidents" data-resource="incidents"><div class="resourceMount"></div></section>
-      <section class="panel resource-panel" id="reports" data-resource="reports"><div class="resourceMount"></div></section>
-
-      <section class="panel" id="admin">
-        <div class="panel-head"><div><p class="eyebrow">Administration</p><h2>Users, roles, permissions</h2></div><button class="btn small" id="refreshAdmin">Refresh admin</button></div>
-        <div class="tabs" id="adminTabs">
-          <button data-admin-tab="users" class="active">Users</button>
-          <button data-admin-tab="roles">Role permissions</button>
-        </div>
-        <div id="adminUsersTab">
-          <form id="adminAddUserForm" class="form-card">
-            <h3>Add user / invite</h3>
-            <div class="form-grid">
-              <label>First name<input name="firstName" required></label>
-              <label>Last name<input name="lastName" required></label>
-              <label>Email / Login<input name="email" type="email" required></label>
-              <label>Initial password<input name="initialPassword" type="password" required autocomplete="new-password"><small>Minimum 10 chars with uppercase, lowercase, number, and special character.</small></label>
-              <label>Role<select name="role" class="roleSelect"></select></label>
-            </div>
-            <div class="form-actions"><button class="btn">Create user</button></div>
-            <div id="inviteOutput" class="notice" hidden></div>
-          </form>
-          <div id="adminUserList" class="table-wrap"></div>
-        </div>
-        <div id="adminRolesTab" hidden>
-          <div class="notice">Check permissions by role. MVP enforcement still primarily uses role-level controls in the API, but this matrix is stored for the admin model and future fine-grained checks.</div>
-          <div id="roleMatrix" class="matrix-wrap"></div>
-          <div class="form-actions"><button class="btn" id="saveRoleMatrix">Save role permissions</button></div>
-        </div>
-      </section>
     </section>
 
     <section class="compliance public-section" id="security">

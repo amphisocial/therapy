@@ -1,0 +1,31 @@
+TherapyAgent consolidated build
+
+This is the single source-of-truth build that merges:
+1. MFA optional for admin-invited users
+2. SMTP invite emails using .env
+3. First-login password change enforcement
+4. Password validation rules
+5. Public marketing page separated from logged-in workspace
+
+Included files:
+- package.json
+- server.js
+- db/schema.sql
+- public/index.html
+- public/workspace.html
+- public/app.js
+- public/styles.css
+
+Important behavior:
+- Public site is /
+- Logged-in app is /workspace.html
+- Admin-created users can log in with email + temporary password without MFA.
+- MFA is optional by default. Set MFA_REQUIRED=true only if you want to enforce it.
+- Admin-created users must change the temporary password at first login.
+- SMTP invite emails use SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_FROM_NAME, SMTP_SECURE, SMTP_STARTTLS, and SITE_ORIGIN from .env.
+- Database schema adds users.must_change_password, users.password_changed_at, users.last_invite_email_at.
+
+Recommended Git workflow:
+- Apply this ZIP to your Windows local repo, not just the server.
+- Commit and push from Windows.
+- On the server, run git pull, psql -f db/schema.sql, and pm2 restart therapyagent --update-env.

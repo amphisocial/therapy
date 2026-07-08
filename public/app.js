@@ -11,6 +11,9 @@ let activeVoice = null;
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const roles = ["org_admin", "bcba", "supervisor", "therapist", "rbt", "billing_auditor", "read_only"];
+const isWorkspacePage = document.body?.dataset?.page === "workspace";
+const isPublicPage = document.body?.dataset?.page === "public";
+
 
 const resourceDefs = {
   sessions: {
@@ -180,15 +183,27 @@ function closeAuth() { $("#authModal")?.classList.remove("show"); $("#authModal"
 function setAuthenticatedUI() {
   document.body.classList.toggle("app-authenticated", !!currentUser);
   document.body.classList.toggle("app-anonymous", !currentUser);
-  $("#publicNav") && ($("#publicNav").hidden = !!currentUser);
+
+  // Public site and logged-in workspace are intentionally separate pages.
+  // The marketing page never tries to render workspace panels, and the workspace page
+  // never contains marketing sections.
+  $("#publicNav") && ($("#publicNav").hidden = false);
   $("#userNav") && ($("#userNav").hidden = !currentUser);
   $("#welcomeUser") && ($("#welcomeUser").textContent = currentUser ? `Welcome ${currentUser.full_name || currentUser.name || currentUser.email}` : "Welcome");
-  $$(".public-section").forEach(s => s.hidden = !!currentUser);
+  $$(".public-section").forEach(s => s.hidden = false);
   $("#workspace") && ($("#workspace").hidden = !currentUser);
+
   renderMfaOptionalBanner();
-  if (currentUser) panel("dashboard");
+  if (currentUser && isWorkspacePage) panel("dashboard");
 }
-function logout() { token = ""; currentUser = null; localStorage.removeItem("ta_token"); setAuthenticatedUI(); openAuth("login"); }
+function logout() {
+  token = "";
+  currentUser = null;
+  localStorage.removeItem("ta_token");
+  setAuthenticatedUI();
+  if (isWorkspacePage) window.location.href = "/?login=1";
+  else openAuth("login");
+}
 
 function renderMfaOptionalBanner() {
   let banner = document.getElementById("mfaOptionalBanner");
@@ -307,7 +322,11 @@ function showPasswordChangeRequiredModal() {
 }
 
 function panel(id) {
-  if (!currentUser && id !== "dashboard") return openAuth("login");
+  if (!currentUser) {
+    if (isWorkspacePage) window.location.replace("/?login=1");
+    else openAuth("login");
+    return;
+  }
   if (currentUser?.must_change_password && id !== "dashboard") return showPasswordChangeRequiredModal();
   $$(".sidebar button").forEach(b => b.classList.toggle("active", b.dataset.panel === id));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
@@ -318,10 +337,20 @@ function panel(id) {
 }
 
 async function initAuth() {
-  if (!token) { setAuthenticatedUI(); return; }
+  if (!token) {
+    setAuthenticatedUI();
+    if (isWorkspacePage) window.location.replace("/?login=1");
+    return;
+  }
   try {
     const out = await api("/api/me");
     currentUser = { ...(out.user || {}), mfaSetup: out.mfaSetup || null };
+
+    if (!isWorkspacePage) {
+      window.location.replace("/workspace.html");
+      return;
+    }
+
     setAuthenticatedUI();
     if (currentUser.must_change_password) {
       showPasswordChangeRequiredModal();
@@ -329,7 +358,13 @@ async function initAuth() {
     }
     await loadPatients();
     await refreshDashboard();
-  } catch (e) { logout(); }
+  } catch (e) {
+    token = "";
+    currentUser = null;
+    localStorage.removeItem("ta_token");
+    setAuthenticatedUI();
+    if (isWorkspacePage) window.location.replace("/?login=1");
+  }
 }
 
 async function loadPatients() {
@@ -761,6 +796,10 @@ $("#loginForm")?.addEventListener("submit", async e => {
     token = out.token; localStorage.setItem("ta_token", token); currentUser = { ...(out.user || {}), mfaSetup: out.mfaSetup || null };
     setAuthMessage(out.message || `Welcome ${out.user.full_name}.`, "success");
     closeAuth();
+    if (!isWorkspacePage) {
+      window.location.href = "/workspace.html";
+      return;
+    }
     setAuthenticatedUI();
     if (currentUser.must_change_password) {
       showPasswordChangeRequiredModal();
@@ -800,4 +839,7 @@ $("#adminAddUserForm")?.addEventListener("submit", async e => {
   } catch (err) { alert(err.message); }
 });
 
+if (isPublicPage && new URLSearchParams(window.location.search).get("login") === "1") {
+  setTimeout(() => openAuth("login"), 0);
+}
 initAuth();

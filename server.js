@@ -370,14 +370,14 @@ async function sendSmtpMail({ to, subject, text, html }) {
   }
 }
 function inviteEmailContent({ fullName, email, initialPassword }) {
-  const loginUrl = SITE_ORIGIN.replace(/\/$/, "");
+  const loginUrl = `${SITE_ORIGIN.replace(/\/$/, "")}/?login=1`;
   const rules = "at least 10 characters, one uppercase letter, one lowercase letter, one number, and one special character";
   const text = `Hello ${fullName},\n\nYou have been invited to TherapyAgent.\n\nLogin link: ${loginUrl}\nLogin/email: ${email}\nTemporary password: ${initialPassword}\n\nOn first login, you will be asked to change this temporary password. Your new password must include ${rules}.\n\nMFA is optional. After login, the workspace will show instructions if you choose to enable MFA.\n\nTherapyAgent`;
   const html = `<p>Hello ${fullName},</p><p>You have been invited to <strong>TherapyAgent</strong>.</p><p><a href="${loginUrl}">Open TherapyAgent</a></p><p><strong>Login/email:</strong> ${email}<br><strong>Temporary password:</strong> ${initialPassword}</p><p>On first login, you will be asked to change this temporary password. Your new password must include ${rules}.</p><p>MFA is optional. After login, the workspace will show instructions if you choose to enable MFA.</p><p>TherapyAgent</p>`;
   return { subject: "Your TherapyAgent login", text, html };
 }
 function resetEmailContent({ fullName, email, temporaryPassword }) {
-  const loginUrl = SITE_ORIGIN.replace(/\/$/, "");
+  const loginUrl = `${SITE_ORIGIN.replace(/\/$/, "")}/?login=1`;
   const rules = "at least 10 characters, one uppercase letter, one lowercase letter, one number, and one special character";
   const text = `Hello ${fullName},\n\nYour TherapyAgent password was reset by your organization administrator.\n\nLogin link: ${loginUrl}\nLogin/email: ${email}\nTemporary password: ${temporaryPassword}\n\nOn next login, you will be asked to change this temporary password. Your new password must include ${rules}.\n\nTherapyAgent`;
   const html = `<p>Hello ${fullName},</p><p>Your TherapyAgent password was reset by your organization administrator.</p><p><a href="${loginUrl}">Open TherapyAgent</a></p><p><strong>Login/email:</strong> ${email}<br><strong>Temporary password:</strong> ${temporaryPassword}</p><p>On next login, you will be asked to change this temporary password. Your new password must include ${rules}.</p><p>TherapyAgent</p>`;
