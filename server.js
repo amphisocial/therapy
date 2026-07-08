@@ -36,6 +36,8 @@ const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || "TherapyAgent";
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID || "";
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY || "";
 const AWS_SESSION_TOKEN = process.env.AWS_SESSION_TOKEN || "";
+const AWS_EC2_METADATA_DISABLED = String(process.env.AWS_EC2_METADATA_DISABLED || "false").toLowerCase() === "true";
+const AWS_EC2_METADATA_BASE_URL = process.env.AWS_EC2_METADATA_BASE_URL || "http://169.254.169.254";
 const S3_BUCKET = process.env.S3_BUCKET || "";
 const S3_REGION = process.env.S3_REGION || "us-east-1";
 const S3_ENDPOINT = process.env.S3_ENDPOINT || "";
@@ -452,14 +454,112 @@ function amzDates(now = new Date()) {
   return { amzDate: iso, dateStamp: iso.slice(0, 8) };
 }
 
-function s3Configured() {
-  return Boolean(S3_BUCKET && S3_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY);
+let awsCredentialCache = null;
+
+function envAwsCredentials() {
+  if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) return null;
+  return {
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+    sessionToken: AWS_SESSION_TOKEN || "",
+    expiration: Number.MAX_SAFE_INTEGER,
+    source: "env"
+  };
 }
 
-function signedS3Options(method, key, body = Buffer.alloc(0), extraHeaders = {}) {
-  if (!s3Configured()) {
-    throw Object.assign(new Error("S3 is not fully configured. Set S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY in .env."), { status: 400 });
+function httpText(url, { method = "GET", headers = {}, body = "", timeoutMs = 1500 } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const client = u.protocol === "https:" ? https : http;
+    const req = client.request(u, { method, headers, timeout: timeoutMs }, res => {
+      const chunks = [];
+      res.on("data", d => chunks.push(d));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        if (res.statusCode >= 200 && res.statusCode < 300) return resolve(text);
+        reject(new Error(`HTTP ${res.statusCode}: ${text.slice(0, 300)}`));
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("request timed out")));
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function getImdsToken() {
+  try {
+    return (await httpText(`${AWS_EC2_METADATA_BASE_URL}/latest/api/token`, {
+      method: "PUT",
+      headers: { "X-aws-ec2-metadata-token-ttl-seconds": "21600" },
+      timeoutMs: 1200
+    })).trim();
+  } catch {
+    return "";
   }
+}
+
+async function fetchEc2RoleCredentials() {
+  if (AWS_EC2_METADATA_DISABLED) {
+    throw new Error("EC2 metadata credentials are disabled. Set AWS_EC2_METADATA_DISABLED=false or provide AWS access keys.");
+  }
+
+  const token = await getImdsToken();
+  const headers = token ? { "X-aws-ec2-metadata-token": token } : {};
+
+  const roleName = (await httpText(`${AWS_EC2_METADATA_BASE_URL}/latest/meta-data/iam/security-credentials/`, {
+    headers,
+    timeoutMs: 1500
+  })).trim().split(/\r?\n/)[0];
+
+  if (!roleName) throw new Error("No IAM role is attached to this EC2 instance.");
+
+  const raw = await httpText(`${AWS_EC2_METADATA_BASE_URL}/latest/meta-data/iam/security-credentials/${encodeURIComponent(roleName)}`, {
+    headers,
+    timeoutMs: 1500
+  });
+
+  const data = JSON.parse(raw);
+  if (data.Code && data.Code !== "Success") throw new Error(`EC2 IAM role credential error: ${data.Code}`);
+  if (!data.AccessKeyId || !data.SecretAccessKey) throw new Error("EC2 IAM role credentials were not returned by instance metadata.");
+
+  return {
+    accessKeyId: data.AccessKeyId,
+    secretAccessKey: data.SecretAccessKey,
+    sessionToken: data.Token || "",
+    expiration: data.Expiration ? new Date(data.Expiration).getTime() : Date.now() + 30 * 60 * 1000,
+    source: `ec2-iam-role:${roleName}`
+  };
+}
+
+async function getAwsCredentials() {
+  const envCreds = envAwsCredentials();
+  if (envCreds) return envCreds;
+
+  if (awsCredentialCache && awsCredentialCache.expiration > Date.now() + 5 * 60 * 1000) {
+    return awsCredentialCache;
+  }
+
+  awsCredentialCache = await fetchEc2RoleCredentials();
+  return awsCredentialCache;
+}
+
+function s3CredentialSource() {
+  if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) return "env";
+  if (!AWS_EC2_METADATA_DISABLED) return "ec2-iam-role";
+  return "";
+}
+
+function s3Configured() {
+  return Boolean(S3_BUCKET && S3_REGION && ((AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) || !AWS_EC2_METADATA_DISABLED));
+}
+
+async function signedS3Options(method, key, body = Buffer.alloc(0), extraHeaders = {}) {
+  if (!S3_BUCKET || !S3_REGION) {
+    throw Object.assign(new Error("S3 is not configured. Set S3_BUCKET and S3_REGION in .env."), { status: 400 });
+  }
+
+  const credentials = await getAwsCredentials();
   const url = s3UrlForKey(S3_BUCKET, key);
   const payload = Buffer.isBuffer(body) ? body : Buffer.from(body || "");
   const payloadHash = hashHex(payload);
@@ -470,7 +570,7 @@ function signedS3Options(method, key, body = Buffer.alloc(0), extraHeaders = {})
     "x-amz-date": amzDate,
     ...extraHeaders
   };
-  if (AWS_SESSION_TOKEN) headers["x-amz-security-token"] = AWS_SESSION_TOKEN;
+  if (credentials.sessionToken) headers["x-amz-security-token"] = credentials.sessionToken;
 
   const normalizedHeaders = {};
   for (const [k, v] of Object.entries(headers)) normalizedHeaders[k.toLowerCase()] = String(v).trim();
@@ -483,10 +583,10 @@ function signedS3Options(method, key, body = Buffer.alloc(0), extraHeaders = {})
   const canonicalRequest = [method, url.pathname, canonicalQuery, canonicalHeaders, signedHeaderNames.join(";"), payloadHash].join("\n");
   const credentialScope = `${dateStamp}/${S3_REGION}/s3/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, hashHex(Buffer.from(canonicalRequest))].join("\n");
-  const signature = hmac(signingKey(AWS_SECRET_ACCESS_KEY, dateStamp, S3_REGION, "s3"), stringToSign, "hex");
-  const authorization = `AWS4-HMAC-SHA256 Credential=${AWS_ACCESS_KEY_ID}/${credentialScope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`;
+  const signature = hmac(signingKey(credentials.secretAccessKey, dateStamp, S3_REGION, "s3"), stringToSign, "hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`;
   const finalHeaders = { ...headers, Authorization: authorization, "Content-Length": String(payload.length) };
-  return { url, headers: finalHeaders, body: payload };
+  return { url, headers: finalHeaders, body: payload, credentialSource: credentials.source };
 }
 
 async function s3PutObject(key, body = Buffer.alloc(0), options = {}) {
@@ -495,7 +595,7 @@ async function s3PutObject(key, body = Buffer.alloc(0), options = {}) {
     headers["x-amz-server-side-encryption"] = "aws:kms";
     headers["x-amz-server-side-encryption-aws-kms-key-id"] = S3_KMS_KEY_ID;
   }
-  const signed = signedS3Options("PUT", key, body, headers);
+  const signed = await signedS3Options("PUT", key, body, headers);
   const client = signed.url.protocol === "http:" ? http : https;
   return new Promise((resolve, reject) => {
     const req = client.request(signed.url, { method: "PUT", headers: signed.headers }, res => {
@@ -513,8 +613,8 @@ async function s3PutObject(key, body = Buffer.alloc(0), options = {}) {
   });
 }
 
-function streamS3Object(key, res, file) {
-  const signed = signedS3Options("GET", key, Buffer.alloc(0), {});
+async function streamS3Object(key, res, file) {
+  const signed = await signedS3Options("GET", key, Buffer.alloc(0), {});
   const client = signed.url.protocol === "http:" ? http : https;
   const req = client.request(signed.url, { method: "GET", headers: signed.headers }, s3res => {
     if (s3res.statusCode < 200 || s3res.statusCode >= 300) {
@@ -569,6 +669,7 @@ function setupJson(row) {
     s3_setup_at: row?.s3_setup_at || null,
     s3_setup_by_name: row?.s3_setup_by_name || "",
     env_configured: s3Configured(),
+    credential_source: s3CredentialSource(),
     env_bucket: S3_BUCKET || "",
     env_region: S3_REGION || "",
     max_upload_mb: S3_MAX_UPLOAD_MB
@@ -1243,7 +1344,7 @@ app.post("/api/admin/attachment-setup", requireAuth, requireMfa, allow("org_admi
   if (!s3Configured()) {
     return res.status(400).json({
       error: "s3_not_configured",
-      message: "S3 is not fully configured. Set S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY in .env, then restart the app."
+      message: "S3 is not configured. Set S3_BUCKET and S3_REGION in .env, and either attach an EC2 IAM role to this instance or provide AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY. Then restart the app."
     });
   }
 
@@ -1327,7 +1428,7 @@ app.get("/api/attachments/:id/download", requireAuth, requireMfa, async (req, re
   try {
     const file = await loadAttachmentRecord(req, req.params.id);
     if (!file) return res.status(404).json({ error: "file_not_found", message: "File not found." });
-    streamS3Object(file.s3_key, res, file);
+    await streamS3Object(file.s3_key, res, file);
   } catch (e) {
     res.status(e.status || 500).json({ error: "download_failed", message: e.message });
   }

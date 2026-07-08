@@ -188,6 +188,18 @@ CREATE TABLE IF NOT EXISTS review_history (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Repair older deployments where review_history already existed with fewer columns.
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS entity_type TEXT;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS entity_id UUID;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS action TEXT;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS from_status TEXT;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS to_status TEXT;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS actor_id UUID REFERENCES users(id);
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS reviewer_id UUID REFERENCES users(id);
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS comment TEXT;
+ALTER TABLE review_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE TABLE IF NOT EXISTS files (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -208,6 +220,25 @@ CREATE TABLE IF NOT EXISTS files (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at TIMESTAMPTZ
 );
+
+-- Repair older deployments where files already existed with fewer columns.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS patient_id UUID REFERENCES patients(id) ON DELETE SET NULL;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS entity_type TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS entity_id UUID;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS original_filename TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_bucket TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_key TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_region TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_version_id TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS mime_type TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS size_bytes BIGINT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS kms_key_id TEXT;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 -- Existing deployments may already have these tables. Add workflow/audit columns idempotently.
 ALTER TABLE session_logs ADD COLUMN IF NOT EXISTS modified_by UUID REFERENCES users(id);

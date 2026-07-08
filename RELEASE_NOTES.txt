@@ -1,42 +1,11 @@
-TherapyAgent S3 Attachment Update
-=================================
+TherapyAgent S3 EC2 IAM Role Update
 
-This build adds org-level S3 attachment setup and record-level file uploads.
+Changes:
+- Supports EC2 IAM role credentials through IMDSv2/IMDSv1 fallback.
+- Keeps existing `.env` access-key support for simple testing.
+- S3 setup no longer requires AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY when EC2 metadata credentials are available.
+- Adds credential_source in attachment setup JSON.
+- Keeps SSE-KMS support through S3_KMS_KEY_ID.
+- Repairs older review_history/files tables before index creation.
 
-Included:
-- Admin & Roles -> Attachment Setup tab.
-- Attach File toggle is disabled by default for each org.
-- Enabling Attach File initializes org S3 prefix/folder markers automatically.
-- Session, Behavior, Plan, Incident, and Report detail forms include Attach File upload.
-- Attachments are saved under the org S3 prefix and tracked in Postgres.
-- Reports include "Save report file to S3" to store a text-file copy of the report output.
-- No new npm packages required. The server uses Node built-ins and AWS SigV4.
-
-Required .env:
-- S3_BUCKET=your-bucket-name
-- S3_REGION=us-east-1
-- AWS_ACCESS_KEY_ID=...
-- AWS_SECRET_ACCESS_KEY=...
-
-Optional .env:
-- AWS_SESSION_TOKEN=...
-- S3_PREFIX_ROOT=orgs
-- S3_KMS_KEY_ID=arn:aws:kms:...
-- S3_MAX_UPLOAD_MB=25
-- S3_ENDPOINT=https://s3.amazonaws.com
-- S3_FORCE_PATH_STYLE=false
-
-Database changes:
-- organizations.attachments_enabled
-- organizations.s3_bucket
-- organizations.s3_region
-- organizations.s3_prefix
-- organizations.s3_setup_at
-- organizations.s3_setup_by
-- files table for S3 metadata
-
-Deploy database:
-set -a
-source .env
-set +a
-psql "$DATABASE_URL" -f db/schema.sql
+No npm install required.
