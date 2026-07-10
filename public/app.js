@@ -393,7 +393,7 @@ function setAuthenticatedUI() {
   $("#workspace") && ($("#workspace").hidden = !currentUser);
 
   renderMfaOptionalBanner();
-  if (currentUser && isWorkspacePage) ensureGlobalSearchUi();
+  ensureGlobalPatientSearch();
   if (currentUser && isWorkspacePage) panel("dashboard");
 }
 function logout() {
@@ -1032,6 +1032,192 @@ async function extractFields(resource, text, root) {
 
 
 
+function ensureGlobalPatientSearch() {
+  const existing = document.getElementById("globalPatientSearchBox");
+  if (!isWorkspacePage || !currentUser || currentUser?.must_change_password) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+
+  const workspace = document.getElementById("workspace");
+  if (!workspace) return;
+
+  const search = document.createElement("section");
+  search.id = "globalPatientSearchBox";
+  search.className = "notice global-patient-search";
+  search.style.gridColumn = "1 / -1";
+  search.style.marginBottom = "14px";
+  search.innerHTML = `
+    <div class="global-search-head" style="display:flex;gap:12px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
+      <div style="flex:1;min-width:280px">
+        <label style="font-weight:800">Patient Search
+          <input id="globalPatientSearchInput" type="search" placeholder="Search patient name, MRN, guardian, diagnosis..." autocomplete="off" style="margin-top:6px">
+        </label>
+        <small class="muted">Search a patient and view linked sessions, behavior events, incidents, therapy plans, ISPs, AI reports, and file metadata.</small>
+      </div>
+      <button class="btn small secondary" type="button" id="clearGlobalPatientSearch">Clear</button>
+    </div>
+    <div id="globalPatientSearchMsg" class="message"></div>
+    <div id="globalPatientSearchResults" class="table-wrap" hidden></div>
+  `;
+
+  workspace.prepend(search);
+
+  const input = search.querySelector("#globalPatientSearchInput");
+  const clear = search.querySelector("#clearGlobalPatientSearch");
+  input?.addEventListener("input", () => {
+    clearTimeout(globalSearchTimer);
+    globalSearchTimer = setTimeout(() => runGlobalPatientSearch(input.value), 250);
+  });
+  clear?.addEventListener("click", () => {
+    input.value = "";
+    setMessage(search.querySelector("#globalPatientSearchMsg"), "");
+    const results = search.querySelector("#globalPatientSearchResults");
+    if (results) { results.hidden = true; results.innerHTML = ""; }
+  });
+}
+
+function globalPatientMatchText(p = {}) {
+  return [
+    fullPatientName(p),
+    p.external_id,
+    p.guardian_name,
+    p.guardian_phone,
+    p.guardian_email,
+    p.diagnosis,
+    p.insurance
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+async function runGlobalPatientSearch(rawQuery = "") {
+  const box = document.getElementById("globalPatientSearchBox");
+  if (!box || !isWorkspacePage || !currentUser) return;
+  const msg = box.querySelector("#globalPatientSearchMsg");
+  const results = box.querySelector("#globalPatientSearchResults");
+  const q = String(rawQuery || "").trim().toLowerCase();
+
+  if (!q) {
+    setMessage(msg, "");
+    if (results) { results.hidden = true; results.innerHTML = ""; }
+    return;
+  }
+  if (q.length < 2) {
+    setMessage(msg, "Type at least 2 characters to search patients.", "info");
+    if (results) { results.hidden = true; results.innerHTML = ""; }
+    return;
+  }
+
+  try {
+    setMessage(msg, "Searching patient records...", "info");
+    if (!patients.length) await loadPatients();
+    const matches = patients
+      .filter(p => globalPatientMatchText(p).includes(q))
+      .slice(0, 8);
+
+    if (!matches.length) {
+      setMessage(msg, "No matching patients found.", "warning");
+      if (results) { results.hidden = false; results.innerHTML = `<div class="empty">No matching patients found.</div>`; }
+      return;
+    }
+
+    const summaries = [];
+    for (const p of matches) {
+      try {
+        const summary = await api(`/api/patients/${encodeURIComponent(p.id)}/summary`);
+        summaries.push({ patient: p, summary });
+      } catch (e) {
+        summaries.push({ patient: p, error: e.message });
+      }
+    }
+
+    renderGlobalPatientSearchResults(summaries);
+    setMessage(msg, `${matches.length} patient match${matches.length === 1 ? "" : "es"} found.`, "success");
+  } catch (e) {
+    setMessage(msg, e.message, "error");
+  }
+}
+
+function globalResourceDate(row = {}) {
+  return row.session_date || row.event_time || row.incident_date || row.effective_from || row.created_at || "";
+}
+
+function globalResourceTitle(resource, row = {}) {
+  if (resource === "sessions") return row.service_code || row.location || row.ai_summary || row.activities || "Session log";
+  if (resource === "behaviors") return row.behavior || "Behavior event";
+  if (resource === "plans") return row.title || row.plan_type || "Therapy plan";
+  if (resource === "isps") return row.title || "Individual Service Plan";
+  if (resource === "incidents") return row.category || row.severity || "Incident";
+  if (resource === "reports") return row.report_type || "AI report";
+  return row.title || row.category || row.report_type || "Record";
+}
+
+function globalSearchRecordRows(summary = {}) {
+  const resources = ["sessions", "behaviors", "plans", "isps", "incidents", "reports"];
+  const rows = [];
+  for (const resource of resources) {
+    const def = resourceDefs[resource];
+    if (!def) continue;
+    for (const row of summary[resource] || []) {
+      rows.push([
+        escapeHtml(def.title),
+        statusBadge(row.status || "draft"),
+        escapeHtml(dateInput(globalResourceDate(row)) || fmtDate(globalResourceDate(row))),
+        escapeHtml(globalResourceTitle(resource, row)),
+        escapeHtml(row.created_by_name || row.user_name || ""),
+        `<button class="link-btn" type="button" data-global-open-resource="${resource}" data-id="${row.id}">Open</button>`
+      ]);
+    }
+  }
+  return rows;
+}
+
+function renderGlobalPatientSearchResults(items = []) {
+  const box = document.getElementById("globalPatientSearchBox");
+  const results = box?.querySelector("#globalPatientSearchResults");
+  if (!results) return;
+
+  results.hidden = false;
+  results.innerHTML = items.map(({ patient, summary, error }) => {
+    const name = fullPatientName(patient);
+    const counts = summary ? [
+      ["Sessions", (summary.sessions || []).length],
+      ["Behaviors", (summary.behaviors || []).length],
+      ["Plans", (summary.plans || []).length],
+      ["ISPs", (summary.isps || []).length],
+      ["Incidents", (summary.incidents || []).length],
+      ["Reports", (summary.reports || []).length]
+    ] : [];
+    const rows = summary ? globalSearchRecordRows(summary) : [];
+    return `<section class="search-result-card" style="margin:14px 0;padding:14px;border:1px solid rgba(15,23,42,.12);border-radius:14px;background:white">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0 0 4px">${escapeHtml(name || "Patient")}</h3>
+          <p class="muted" style="margin:0">MRN: ${escapeHtml(patient.external_id || "not set")} · DOB: ${escapeHtml(dateInput(patient.date_of_birth) || "not set")} · Diagnosis/program: ${escapeHtml(patient.diagnosis || "not set")}</p>
+          ${counts.length ? `<p class="muted" style="margin:6px 0 0">${counts.map(([k,v]) => `${k}: ${v}`).join(" · ")}</p>` : ""}
+        </div>
+        <button class="btn small" type="button" data-global-open-patient="${patient.id}">Open patient</button>
+      </div>
+      ${error ? `<div class="error" style="margin-top:10px">${escapeHtml(error)}</div>` : tableHtml(["Type", "Status", "Date", "Details", "Created By", "Action"], rows)}
+    </section>`;
+  }).join("");
+
+  $$(`[data-global-open-patient]`, results).forEach(b => {
+    b.onclick = () => {
+      panel("patients");
+      setTimeout(() => openPatientDetail(b.dataset.globalOpenPatient), 150);
+    };
+  });
+  $$(`[data-global-open-resource]`, results).forEach(b => {
+    b.onclick = () => {
+      const resource = b.dataset.globalOpenResource;
+      panel(resource);
+      setTimeout(() => openResourceDetail(resource, b.dataset.id), 150);
+    };
+  });
+}
+
+
 function metricHtml(label, value, helper = "") {
   return `<div class="metric"><span>${escapeHtml(value ?? "0")}</span><label>${escapeHtml(label)}</label>${helper ? `<small>${escapeHtml(helper)}</small>` : ""}</div>`;
 }
@@ -1288,148 +1474,6 @@ async function saveRoleMatrix() {
   try { await api("/api/admin/role-permissions", { method: "PUT", body: JSON.stringify({ matrix: roleMatrix.matrix }) }); alert("Role permissions saved."); } catch (e) { alert(e.message); }
 }
 
-
-function ensureGlobalSearchUi() {
-  if (!isWorkspacePage || !currentUser) return;
-  ensureGlobalSearchStyles();
-  const workspace = $("#workspace");
-  if (!workspace || $("#globalSearchBar")) return;
-
-  const bar = document.createElement("section");
-  bar.id = "globalSearchBar";
-  bar.className = "global-search-bar";
-  bar.innerHTML = `
-    <div class="global-search-main">
-      <label class="global-search-label" for="globalSearchInput">Search</label>
-      <input id="globalSearchInput" autocomplete="off" placeholder="Search patient name, MRN, behavior, plan, incident, report, or attachment...">
-      <button class="btn small" id="globalSearchBtn" type="button">Search</button>
-      <button class="btn small secondary" id="globalSearchClear" type="button">Clear</button>
-    </div>
-    <div id="globalSearchMsg" class="global-search-msg"></div>
-    <div id="globalSearchResults" class="global-search-results" hidden></div>
-  `;
-
-  const firstPanel = workspace.querySelector(".panel");
-  workspace.insertBefore(bar, firstPanel || workspace.firstChild);
-
-  $("#globalSearchBtn")?.addEventListener("click", runGlobalSearch);
-  $("#globalSearchClear")?.addEventListener("click", clearGlobalSearch);
-  $("#globalSearchInput")?.addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      runGlobalSearch();
-    }
-    if (e.key === "Escape") clearGlobalSearch();
-  });
-  $("#globalSearchInput")?.addEventListener("input", e => {
-    const q = e.target.value.trim();
-    clearTimeout(globalSearchTimer);
-    if (q.length < 2) {
-      $("#globalSearchResults") && ($("#globalSearchResults").hidden = true);
-      $("#globalSearchMsg") && ($("#globalSearchMsg").textContent = "");
-      return;
-    }
-    globalSearchTimer = setTimeout(runGlobalSearch, 450);
-  });
-}
-
-function ensureGlobalSearchStyles() {
-  if (document.getElementById("globalSearchStyles")) return;
-  const style = document.createElement("style");
-  style.id = "globalSearchStyles";
-  style.textContent = `
-    .global-search-bar{grid-column:1/-1;background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:18px;padding:14px 16px;margin:0 0 16px;box-shadow:0 8px 28px rgba(15,23,42,.07)}
-    .global-search-main{display:grid;grid-template-columns:auto minmax(260px,1fr) auto auto;gap:10px;align-items:center}
-    .global-search-label{font-weight:800;color:#334155;margin:0}
-    #globalSearchInput{width:100%;border:1px solid rgba(15,23,42,.18);border-radius:12px;padding:11px 13px;font-size:15px}
-    .global-search-msg{font-size:13px;font-weight:700;margin-top:8px;color:#64748b}
-    .global-search-results{margin-top:12px;border-top:1px solid rgba(15,23,42,.08);padding-top:12px}
-    .search-result-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
-    .search-result-head h3{margin:0;font-size:17px}.search-result-head small{color:#64748b}
-    .search-chip{display:inline-block;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:800;font-size:12px;padding:4px 8px}
-    .search-snippet{max-width:420px;white-space:normal;color:#475569;font-size:13px;line-height:1.35}
-    .search-actions{white-space:nowrap}.search-actions .link-btn{margin-right:8px}
-    @media(max-width:820px){.global-search-main{grid-template-columns:1fr}.global-search-label{display:none}}
-  `;
-  document.head.appendChild(style);
-}
-
-function clearGlobalSearch() {
-  clearTimeout(globalSearchTimer);
-  const input = $("#globalSearchInput");
-  const results = $("#globalSearchResults");
-  const msg = $("#globalSearchMsg");
-  if (input) input.value = "";
-  if (results) { results.hidden = true; results.innerHTML = ""; }
-  if (msg) msg.textContent = "";
-}
-
-async function runGlobalSearch() {
-  const input = $("#globalSearchInput");
-  const msg = $("#globalSearchMsg");
-  const results = $("#globalSearchResults");
-  const q = (input?.value || "").trim();
-  if (!q || q.length < 2) {
-    if (msg) msg.textContent = "Type at least 2 characters.";
-    return;
-  }
-  try {
-    if (msg) msg.textContent = "Searching TherapyAgent records...";
-    const out = await api(`/api/search?q=${encodeURIComponent(q)}`);
-    renderGlobalSearchResults(out);
-    if (msg) msg.textContent = `${(out.results || []).length} result(s) found for “${q}”.`;
-  } catch (e) {
-    if (results) { results.hidden = false; results.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
-    if (msg) msg.textContent = "Search failed.";
-  }
-}
-
-function renderGlobalSearchResults(out) {
-  const mount = $("#globalSearchResults");
-  if (!mount) return;
-  const rows = out.results || [];
-  mount.hidden = false;
-  if (!rows.length) {
-    mount.innerHTML = `<div class="empty">No matching patient records found.</div>`;
-    return;
-  }
-  const tableRows = rows.map(r => {
-    const resource = r.resource || "";
-    const patientLabel = r.patient_name || r.title || "";
-    const title = r.title || r.resource_label || "Record";
-    const openAction = resource === "files"
-      ? `<button class="link-btn" data-search-download="${escapeHtml(r.id)}" data-filename="${escapeHtml(title)}">Download</button>${r.patient_id ? ` <button class="link-btn" data-search-open-patient="${escapeHtml(r.patient_id)}">Open patient</button>` : ""}`
-      : resource === "patients"
-        ? `<button class="link-btn" data-search-open-patient="${escapeHtml(r.id)}">Open patient</button>`
-        : `<button class="link-btn" data-search-open-resource="${escapeHtml(resource)}" data-id="${escapeHtml(r.id)}">Open</button>${r.patient_id ? ` <button class="link-btn" data-search-open-patient="${escapeHtml(r.patient_id)}">Patient</button>` : ""}`;
-    return [
-      `<span class="search-chip">${escapeHtml(r.resource_label || resource)}</span>`,
-      escapeHtml(patientLabel),
-      escapeHtml(fmtDate(r.record_date || r.created_at)),
-      `<strong>${escapeHtml(title)}</strong><div class="search-snippet">${escapeHtml(r.snippet || "")}</div>`,
-      `<span class="search-actions">${openAction}</span>`
-    ];
-  });
-  mount.innerHTML = `
-    <div class="search-result-head"><h3>Search results</h3><small>Patient-linked sessions, behaviors, plans, ISPs, incidents, reports, and attachments.</small></div>
-    ${tableHtml(["Type", "Patient", "Date", "Match", "Action"], tableRows)}
-  `;
-  $$('[data-search-open-patient]', mount).forEach(b => b.onclick = async () => {
-    panel("patients");
-    setTimeout(() => openPatientDetail(b.dataset.searchOpenPatient), 250);
-  });
-  $$('[data-search-open-resource]', mount).forEach(b => b.onclick = async () => {
-    const resource = b.dataset.searchOpenResource;
-    if (!resourceDefs[resource]) return alert("This result type cannot be opened directly yet.");
-    panel(resource);
-    setTimeout(() => openResourceDetail(resource, b.dataset.id), 250);
-  });
-  $$('[data-search-download]', mount).forEach(b => b.onclick = async () => {
-    try { await downloadAttachment(b.dataset.searchDownload, b.dataset.filename || "attachment"); }
-    catch (e) { alert(e.message); }
-  });
-}
-
 async function refreshDashboard() {
   if (currentUser?.must_change_password) return;
   $("#metricPatients") && ($("#metricPatients").textContent = String(patients.length));
@@ -1447,170 +1491,6 @@ async function refreshDashboard() {
 }
 
 
-
-function ensureGlobalSearchStyles() {
-  if (document.getElementById("globalPatientSearchStyles")) return;
-  const style = document.createElement("style");
-  style.id = "globalPatientSearchStyles";
-  style.textContent = `
-    .global-search-card { grid-column: 1 / -1; background: #fff; border: 1px solid rgba(15,23,42,.10); border-radius: 18px; padding: 14px 16px; box-shadow: 0 12px 30px rgba(15,23,42,.06); margin-bottom: 14px; }
-    .global-search-row { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; gap: 10px; align-items: end; }
-    .global-search-card label { font-weight: 700; color: #172033; }
-    .global-search-card input { width: 100%; margin-top: 6px; }
-    .global-search-hint { margin: 6px 0 0; font-size: 12px; color: #64748b; }
-    .global-search-results { margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
-    .global-search-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-    .global-search-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #dbeafe; background: #eff6ff; color: #1d4ed8; padding: 6px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
-    .global-result-group { margin-top: 14px; }
-    .global-result-group h4 { margin: 0 0 8px; }
-    .global-result-note { color:#64748b; font-size: 12px; }
-    @media (max-width: 760px) { .global-search-row { grid-template-columns: 1fr; } }
-  `;
-  document.head.appendChild(style);
-}
-
-function recordTypeLabel(type = "") {
-  return {
-    patient: "Patient",
-    patients: "Patient",
-    sessions: "Session",
-    behaviors: "Behavior Event",
-    plans: "Therapy Plan",
-    isps: "ISP",
-    incidents: "Incident",
-    reports: "AI Report",
-    files: "Attachment"
-  }[type] || type;
-}
-
-function openSearchTarget(resource, id, patientId = "") {
-  if (!resource) return;
-  if (resource === "patient" || resource === "patients") {
-    panel("patients");
-    setTimeout(() => openPatientDetail(id), 250);
-    return;
-  }
-  if (resource === "files") {
-    if (patientId) {
-      panel("patients");
-      setTimeout(() => openPatientDetail(patientId), 250);
-    }
-    return;
-  }
-  if (resourceDefs[resource]) {
-    panel(resource);
-    setTimeout(() => openResourceDetail(resource, id), 250);
-  }
-}
-
-function renderGlobalSearchResults(out) {
-  const mount = $("#globalPatientSearchResults");
-  if (!mount) return;
-  const patientsFound = out.patients || [];
-  const records = out.records || [];
-  const counts = out.counts || {};
-
-  if (!patientsFound.length && !records.length) {
-    mount.hidden = false;
-    mount.innerHTML = `<div class="notice">No matching patients found. Try first name, last name, MRN, guardian, or diagnosis/program.</div>`;
-    return;
-  }
-
-  const summary = [
-    ["Patients", patientsFound.length],
-    ["Sessions", counts.sessions || 0],
-    ["Behaviors", counts.behaviors || 0],
-    ["Incidents", counts.incidents || 0],
-    ["Plans", counts.plans || 0],
-    ["ISPs", counts.isps || 0],
-    ["Reports", counts.reports || 0],
-    ["Attachments", counts.files || 0]
-  ].map(([label, value]) => `<span class="global-search-pill">${escapeHtml(label)} <b>${escapeHtml(value)}</b></span>`).join("");
-
-  const patientRows = patientsFound.map(p => [
-    `<button class="link-btn" type="button" data-search-open="patients" data-id="${p.id}">${escapeHtml(p.full_name || `${p.first_name || ""} ${p.last_name || ""}`.trim())}</button>`,
-    escapeHtml(dateInput(p.date_of_birth)),
-    escapeHtml(p.external_id || ""),
-    escapeHtml(p.diagnosis || ""),
-    escapeHtml(p.guardian_name || ""),
-    escapeHtml(p.status || "")
-  ]);
-
-  const recordRows = records.map(r => [
-    `<span class="status">${escapeHtml(recordTypeLabel(r.resource))}</span>`,
-    `<button class="link-btn" type="button" data-search-open="${escapeHtml(r.resource)}" data-id="${escapeHtml(r.id)}" data-patient-id="${escapeHtml(r.patient_id || "")}">${escapeHtml(r.title || r.details || "Record")}</button>`,
-    escapeHtml(r.patient_name || ""),
-    escapeHtml(r.status || ""),
-    escapeHtml(dateInput(r.record_date) || fmtDate(r.record_date || r.created_at)),
-    escapeHtml(r.created_by_name || "")
-  ]);
-
-  mount.hidden = false;
-  mount.innerHTML = `
-    <div class="global-search-summary">${summary}</div>
-    <div class="global-result-group">
-      <h4>Matched patients</h4>
-      ${tableHtml(["Patient", "DOB", "MRN", "Diagnosis / Program", "Guardian", "Status"], patientRows)}
-    </div>
-    <div class="global-result-group">
-      <h4>Related records</h4>
-      <p class="global-result-note">These are records connected to the matched patient(s), newest first.</p>
-      ${tableHtml(["Type", "Title / Details", "Patient", "Status", "Date", "Created By"], recordRows)}
-    </div>`;
-
-  $$(`[data-search-open]`, mount).forEach(b => b.onclick = () => openSearchTarget(b.dataset.searchOpen, b.dataset.id, b.dataset.patientId || ""));
-}
-
-async function runGlobalPatientSearch() {
-  const input = $("#globalPatientSearchInput");
-  const msg = $("#globalPatientSearchMsg");
-  const q = (input?.value || "").trim();
-  const mount = $("#globalPatientSearchResults");
-  if (!q || q.length < 2) {
-    if (mount) { mount.hidden = true; mount.innerHTML = ""; }
-    setMessage(msg, "Type at least 2 characters to search patients.", "info");
-    return;
-  }
-  try {
-    setMessage(msg, "Searching patient records...", "info");
-    const out = await api(`/api/search/patient-records?q=${encodeURIComponent(q)}`);
-    setMessage(msg, out.message || "Search complete.", "success");
-    renderGlobalSearchResults(out);
-  } catch (e) {
-    setMessage(msg, e.message, "error");
-  }
-}
-
-function clearGlobalPatientSearch() {
-  const input = $("#globalPatientSearchInput");
-  const mount = $("#globalPatientSearchResults");
-  if (input) input.value = "";
-  if (mount) { mount.hidden = true; mount.innerHTML = ""; }
-  setMessage($("#globalPatientSearchMsg"), "");
-}
-
-function bindGlobalPatientSearch() {
-  const input = $("#globalPatientSearchInput");
-  if (!input || input.dataset.bound === "1") return;
-  input.dataset.bound = "1";
-  let timer = null;
-  input.addEventListener("input", () => {
-    clearTimeout(timer);
-    const q = input.value.trim();
-    if (q.length < 2) return clearGlobalPatientSearch();
-    timer = setTimeout(runGlobalPatientSearch, 350);
-  });
-  input.addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      runGlobalPatientSearch();
-    }
-    if (e.key === "Escape") clearGlobalPatientSearch();
-  });
-  $("#globalPatientSearchBtn")?.addEventListener("click", runGlobalPatientSearch);
-  $("#globalPatientSearchClear")?.addEventListener("click", clearGlobalPatientSearch);
-}
-
 function ensureWorkspaceUiPatch() {
   if (!isWorkspacePage) return;
 
@@ -1624,25 +1504,6 @@ function ensureWorkspaceUiPatch() {
   }
 
   const workspace = $("#workspace");
-  ensureGlobalSearchStyles();
-  if (workspace && !$("#globalPatientSearchBar")) {
-    const search = document.createElement("section");
-    search.id = "globalPatientSearchBar";
-    search.className = "global-search-card";
-    search.innerHTML = `
-      <div class="global-search-row">
-        <label>Search patient records
-          <input id="globalPatientSearchInput" type="search" placeholder="Search patient name, MRN, guardian, diagnosis/program..." autocomplete="off">
-        </label>
-        <button class="btn small" id="globalPatientSearchBtn" type="button">Search</button>
-        <button class="btn small secondary" id="globalPatientSearchClear" type="button">Clear</button>
-      </div>
-      <p class="global-search-hint">Search by patient name to see related sessions, behavior events, incidents, therapy plans, ISPs, AI reports, and attachments.</p>
-      <div id="globalPatientSearchMsg" class="message"></div>
-      <div id="globalPatientSearchResults" class="global-search-results" hidden></div>`;
-    workspace.prepend(search);
-    bindGlobalPatientSearch();
-  }
   if (workspace && !$("#isps")) {
     const section = document.createElement("section");
     section.className = "panel resource-panel";
@@ -1686,7 +1547,6 @@ function ensureWorkspaceUiPatch() {
 
 
 ensureWorkspaceUiPatch();
-bindGlobalPatientSearch();
 
 // Event bindings
 $$(".sidebar button").forEach(b => b.onclick = () => panel(b.dataset.panel));
