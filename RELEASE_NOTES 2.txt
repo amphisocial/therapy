@@ -1,0 +1,18 @@
+TherapyAgent Data Analytics + AI Workbench
+
+Adds:
+- Data Analytics workspace page
+- Patient risk signals based on behavior/incident/session/plan patterns
+- Behavior function and incident severity summaries
+- Staff workload analytics
+- Compliance/data quality checks
+- AI Workbench page
+- ABA-Skilled BCBA Agent
+- Patient-context-aware support using sessions, behaviors, incidents, plans, and reports
+- Local no-PHI fallback mode when ALLOW_PHI_TO_LLM is false
+- AI Workbench history table
+
+Safety posture:
+- Clinician-reviewed support only
+- No diagnosis, prescription, medical necessity determination, or autonomous treatment decisions
+- Copyrighted ABA book content is not preloaded

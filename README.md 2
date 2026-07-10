@@ -1,0 +1,65 @@
+# TherapyAgent Data Analytics + AI Workbench Update
+
+This package adds two new TherapyAgent workspace modules:
+
+- **Data Analytics**: org metrics, behavior/incident trends, patient risk signals, staff workload, and compliance/data quality checks.
+- **AI Workbench**: an ABA-Skilled BCBA Agent that uses TherapyAgent patient history as context for clinician-reviewed planning support.
+
+The AI Workbench is intentionally safe by default:
+
+- If `ALLOW_PHI_TO_LLM=false`, it uses local no-PHI mode and does not send patient context to an LLM.
+- If `ALLOW_PHI_TO_LLM=true`, it can call your configured AI provider with patient context. Enable this only after confirming your AI provider, BAA, HIPAA posture, and internal policy.
+- Outputs require clinician review and do not diagnose, prescribe treatment, determine medical necessity, or replace BCBA judgment.
+
+## Apply
+
+From your TherapyAgent repo/server path:
+
+```bash
+cd /opt/apps/therapy
+unzip therapyagent-analytics-ai-workbench-update.zip
+python3 scripts/apply-analytics-ai-workbench-update.py
+
+node --check server.js
+node --check public/app.js
+
+set -a
+source .env
+set +a
+psql "$DATABASE_URL" -f db/schema.sql
+
+pm2 restart therapyagent --update-env
+pm2 logs therapyagent --lines 80 --nostream
+```
+
+Hard refresh the browser and log into the workspace. The left menu should now show:
+
+- Data Analytics
+- AI Workbench
+
+## Suggested env
+
+Safe default:
+
+```bash
+ALLOW_PHI_TO_LLM=false
+```
+
+Only after AI/BAA review:
+
+```bash
+ALLOW_PHI_TO_LLM=true
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o-mini
+```
+
+## Commit
+
+```bash
+git status
+git add server.js db/schema.sql public/workspace.html public/app.js public/styles.css scripts/apply-analytics-ai-workbench-update.py README.md
+git commit -m "Add data analytics dashboard and ABA AI Workbench"
+git push origin main
+```
+
+Do not commit backup files created by the patch script.
