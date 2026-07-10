@@ -851,7 +851,7 @@ function structuredTextToJson(value, fieldName = "") {
 }
 
 
-function cleanStructuredText__duplicate_1(value, fieldName = "") {
+function cleanStructuredText(value, fieldName = "") {
   if (value == null || value === "") return "";
   let v = value;
   if (typeof v === "string") {
@@ -886,7 +886,7 @@ function cleanStructuredText__duplicate_1(value, fieldName = "") {
   }).filter(Boolean).join("\n");
 }
 
-function structuredTextToJson__duplicate_1(value, fieldName = "") {
+function structuredTextToJson(value, fieldName = "") {
   const text = String(value || "").trim();
   if (!text) return "[]";
 
