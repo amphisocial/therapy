@@ -12,6 +12,8 @@ let analyticsCache = null;
 let aiWorkbenchBootstrap = null;
 let globalSearchTimer = null;
 let globalSearchModalQuery = "";
+let bcbaChatState = null;
+
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -462,6 +464,28 @@ function ensureProfessionalStyles() {
     .ta-summary-item { border:1px solid rgba(15,23,42,.1); border-radius:12px; padding:12px; background:#fff; }
     .ta-summary-item strong { display:block; color:#0f172a; margin-bottom:5px; }
     .ta-summary-item span { white-space:pre-wrap; color:#334155; }
+
+    .ta-chat-shell { display:grid; grid-template-columns:300px 1fr; gap:18px; min-height:620px; }
+    .ta-chat-side { border:1px solid rgba(15,23,42,.1); border-radius:18px; background:#fff; padding:16px; align-self:start; }
+    .ta-chat-side label { display:block; margin-bottom:12px; }
+    .ta-chat-side select, .ta-chat-side input { width:100%; }
+    .ta-chat-main { border:1px solid rgba(15,23,42,.1); border-radius:18px; background:#fff; display:flex; flex-direction:column; min-height:620px; overflow:hidden; }
+    .ta-chat-transcript { flex:1; padding:20px; overflow:auto; background:linear-gradient(180deg,#f8fafc,#fff); }
+    .ta-chat-empty { border:1px dashed rgba(37,99,235,.25); border-radius:18px; padding:22px; background:white; color:#334155; }
+    .ta-chat-empty h3 { margin:0 0 8px; color:#0f172a; }
+    .ta-chat-bubble { max-width:82%; margin:0 0 14px; border-radius:18px; padding:13px 15px; box-shadow:0 10px 24px rgba(15,23,42,.06); white-space:pre-wrap; line-height:1.45; }
+    .ta-chat-bubble.user { margin-left:auto; background:#2563eb; color:#fff; border-bottom-right-radius:6px; }
+    .ta-chat-bubble.assistant { margin-right:auto; background:#fff; color:#0f172a; border:1px solid rgba(15,23,42,.1); border-bottom-left-radius:6px; }
+    .ta-chat-bubble.system { max-width:100%; margin-left:auto; margin-right:auto; background:#ecfeff; color:#155e75; border:1px solid rgba(6,182,212,.25); font-size:.92rem; }
+    .ta-chat-meta { display:block; font-size:.76rem; opacity:.74; margin-bottom:6px; font-weight:700; }
+    .ta-chat-compose { border-top:1px solid rgba(15,23,42,.1); background:#fff; padding:14px; display:grid; gap:10px; }
+    .ta-chat-compose textarea { min-height:86px; resize:vertical; }
+    .ta-chat-tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+    .ta-chat-suggestions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .ta-chip-btn { border:1px solid rgba(37,99,235,.25); background:#eff6ff; color:#1d4ed8; border-radius:999px; padding:7px 10px; cursor:pointer; font-weight:700; font-size:.85rem; }
+    .ta-chip-btn:hover { background:#dbeafe; }
+    @media (max-width: 980px) { .ta-chat-shell { grid-template-columns:1fr; } .ta-chat-bubble { max-width:96%; } }
+
     @media (max-width: 820px) {
       .ta-search-launcher { min-width:100%; width:100%; }
       #userNav { flex-wrap:wrap; }
@@ -1024,6 +1048,7 @@ function panel(id) {
   if (id === "patients") loadPatients();
   if (id === "analytics") loadAnalytics();
   if (id === "aiWorkbench") loadAiWorkbench();
+  if (id === "bcbaChat") loadBcbaChat();
   if (id === "inbox") loadInbox();
   if (resourceDefs[id]) loadResourceList(id);
   if (id === "admin") loadAdmin();
@@ -1720,6 +1745,230 @@ async function generateIspFromWorkbench() {
   }
 }
 
+
+function bcbaChatStorageKey() {
+  return `therapyagent_bcba_chat_${currentUser?.id || "anonymous"}`;
+}
+
+function newBcbaChatState() {
+  return {
+    patient_id: "",
+    date_range_days: "90",
+    messages: [
+      {
+        role: "system",
+        text: "BCBA Chat is ready. Select a patient for patient-specific context, or leave patient blank for organization-level guidance. Outputs require clinician review.",
+        at: new Date().toISOString()
+      }
+    ]
+  };
+}
+
+function loadBcbaChatState() {
+  if (bcbaChatState) return bcbaChatState;
+  try {
+    const saved = JSON.parse(localStorage.getItem(bcbaChatStorageKey()) || "null");
+    if (saved && Array.isArray(saved.messages)) {
+      bcbaChatState = {
+        patient_id: saved.patient_id || "",
+        date_range_days: String(saved.date_range_days || "90"),
+        messages: saved.messages.slice(-60)
+      };
+      return bcbaChatState;
+    }
+  } catch {}
+  bcbaChatState = newBcbaChatState();
+  return bcbaChatState;
+}
+
+function saveBcbaChatState() {
+  if (!bcbaChatState) return;
+  try {
+    bcbaChatState.messages = (bcbaChatState.messages || []).slice(-60);
+    localStorage.setItem(bcbaChatStorageKey(), JSON.stringify(bcbaChatState));
+  } catch {}
+}
+
+function bcbaChatPatientOptions(selected = "") {
+  return `<option value="">No single patient / organization-level chat</option>` + patients.map(p => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${escapeHtml(fullPatientName(p))}${p.diagnosis ? ` — ${escapeHtml(p.diagnosis)}` : ""}</option>`).join("");
+}
+
+function renderBcbaChatMessages() {
+  const mount = $("#bcbaChatTranscript");
+  if (!mount) return;
+  const state = loadBcbaChatState();
+  const msgs = state.messages || [];
+  if (!msgs.length) {
+    mount.innerHTML = `<div class="ta-chat-empty"><h3>Start a BCBA chat</h3><p>Ask about behavior patterns, plan review preparation, parent/staff training ideas, data gaps, ISP drafting, or documentation quality.</p></div>`;
+    return;
+  }
+  mount.innerHTML = msgs.map(m => `
+    <div class="ta-chat-bubble ${escapeHtml(m.role || "assistant")}">
+      <span class="ta-chat-meta">${escapeHtml(m.role === "user" ? "You" : m.role === "system" ? "TherapyAgent" : "ABA-Skilled BCBA Agent")} ${m.mode ? `• ${escapeHtml(m.mode)}` : ""}</span>
+      ${escapeHtml(m.text || "").replace(/\n/g, "<br>")}
+    </div>`).join("");
+  mount.scrollTop = mount.scrollHeight;
+}
+
+function bcbaChatHistoryPrompt(question) {
+  const state = loadBcbaChatState();
+  const history = (state.messages || [])
+    .filter(m => ["user", "assistant"].includes(m.role))
+    .slice(-10)
+    .map(m => `${m.role === "user" ? "User" : "ABA-Skilled BCBA Agent"}: ${m.text}`)
+    .join("\n\n");
+  return `This is an ongoing TherapyAgent BCBA Chat. Continue the conversation naturally and clinically. Use the TherapyAgent ABA-Skilled BCBA Agent skill and any selected patient context. Do not diagnose, prescribe, determine medical necessity, or replace BCBA judgment. Be practical, evidence-linked, and ask clarifying questions when needed.\n\nConversation so far:\n${history || "No prior conversation in this thread."}\n\nCurrent user message:\n${question}`;
+}
+
+async function loadBcbaChat() {
+  if (!isWorkspacePage || !currentUser) return;
+  ensureProfessionalStyles();
+  if (!patients.length) {
+    try { await loadPatients(); } catch {}
+  }
+  const mount = $("#bcbaChat .bcbaChatMount") || $("#bcbaChat");
+  if (!mount) return;
+  const state = loadBcbaChatState();
+  mount.innerHTML = `
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Conversational assistant</p>
+        <h2>BCBA Chat</h2>
+      </div>
+      <button class="btn small secondary" id="newBcbaChat" type="button">New chat</button>
+    </div>
+    <div class="notice">Chat with the ABA-Skilled BCBA Agent. Select a patient for patient-specific context, or keep it organization-level. Outputs require clinician review and do not replace BCBA judgment.</div>
+    <section class="ta-chat-shell">
+      <aside class="ta-chat-side">
+        <label>Patient context
+          <select id="bcbaChatPatient">${bcbaChatPatientOptions(state.patient_id || "")}</select>
+        </label>
+        <label>Date range
+          <select id="bcbaChatRange">
+            <option value="30" ${state.date_range_days === "30" ? "selected" : ""}>Last 30 days</option>
+            <option value="90" ${state.date_range_days === "90" ? "selected" : ""}>Last 90 days</option>
+            <option value="180" ${state.date_range_days === "180" ? "selected" : ""}>Last 180 days</option>
+            <option value="365" ${state.date_range_days === "365" ? "selected" : ""}>Last 365 days</option>
+          </select>
+        </label>
+        <div class="ta-search-card">
+          <h3>Try asking</h3>
+          <div class="ta-chat-suggestions">
+            <button class="ta-chip-btn" data-chat-suggest="What are the top behavior patterns and data gaps I should review?">Patterns & gaps</button>
+            <button class="ta-chip-btn" data-chat-suggest="Help me prepare for a BCBA plan review for this patient.">Plan review</button>
+            <button class="ta-chip-btn" data-chat-suggest="Suggest caregiver or staff training topics based on available records.">Training topics</button>
+            <button class="ta-chip-btn" data-chat-suggest="What should I verify before updating the ISP?">ISP readiness</button>
+          </div>
+        </div>
+        <div class="message" id="bcbaChatMsg"></div>
+      </aside>
+      <main class="ta-chat-main">
+        <div class="ta-chat-transcript" id="bcbaChatTranscript"></div>
+        <form class="ta-chat-compose" id="bcbaChatForm">
+          <textarea id="bcbaChatInput" placeholder="Ask a follow-up question. Example: Given the recent incidents, what should I check before changing the intervention plan?"></textarea>
+          <div class="ta-chat-tools">
+            <span class="muted">Uses AI Workbench context and the configured ABA/BCBA skill.</span>
+            <div>
+              <button class="btn secondary" id="bcbaChatGenerateIsp" type="button">Generate ISP Draft</button>
+              <button class="btn" type="submit">Send</button>
+            </div>
+          </div>
+        </form>
+      </main>
+    </section>`;
+  renderBcbaChatMessages();
+
+  $("#bcbaChatPatient")?.addEventListener("change", e => {
+    state.patient_id = e.target.value || "";
+    state.messages.push({ role: "system", text: state.patient_id ? "Patient context changed. Future answers will use the selected patient context." : "Patient context cleared. Future answers will be organization-level.", at: new Date().toISOString() });
+    saveBcbaChatState();
+    renderBcbaChatMessages();
+  });
+  $("#bcbaChatRange")?.addEventListener("change", e => {
+    state.date_range_days = e.target.value || "90";
+    saveBcbaChatState();
+  });
+  $("#newBcbaChat")?.addEventListener("click", () => {
+    bcbaChatState = newBcbaChatState();
+    localStorage.setItem(bcbaChatStorageKey(), JSON.stringify(bcbaChatState));
+    loadBcbaChat();
+  });
+  $("#bcbaChatForm")?.addEventListener("submit", sendBcbaChatMessage);
+  $("#bcbaChatGenerateIsp")?.addEventListener("click", generateIspFromBcbaChat);
+  $$('[data-chat-suggest]', mount).forEach(b => b.onclick = () => {
+    const input = $("#bcbaChatInput");
+    if (input) {
+      input.value = b.dataset.chatSuggest || "";
+      input.focus();
+    }
+  });
+}
+
+async function sendBcbaChatMessage(e) {
+  e?.preventDefault?.();
+  const msg = $("#bcbaChatMsg");
+  const input = $("#bcbaChatInput");
+  const question = String(input?.value || "").trim();
+  if (!question) return setMessage(msg, "Type a message first.", "error");
+
+  const state = loadBcbaChatState();
+  state.patient_id = $("#bcbaChatPatient")?.value || state.patient_id || "";
+  state.date_range_days = $("#bcbaChatRange")?.value || state.date_range_days || "90";
+  state.messages.push({ role: "user", text: question, at: new Date().toISOString() });
+  if (input) input.value = "";
+  saveBcbaChatState();
+  renderBcbaChatMessages();
+
+  try {
+    setMessage(msg, "Thinking with TherapyAgent context...", "info");
+    const out = await api("/api/ai/workbench", {
+      method: "POST",
+      body: JSON.stringify({
+        patient_id: state.patient_id || "",
+        date_range_days: state.date_range_days || "90",
+        mode: "general",
+        question: bcbaChatHistoryPrompt(question)
+      })
+    });
+    state.messages.push({ role: "assistant", text: out.answer || "No answer returned.", mode: out.mode || "", evidence: out.evidence || [], at: new Date().toISOString() });
+    saveBcbaChatState();
+    renderBcbaChatMessages();
+    setMessage(msg, out.message || "Response generated.", "success");
+  } catch (err) {
+    state.messages.push({ role: "system", text: `Chat failed: ${err.message}`, at: new Date().toISOString() });
+    saveBcbaChatState();
+    renderBcbaChatMessages();
+    setMessage(msg, err.message, "error");
+  }
+}
+
+async function generateIspFromBcbaChat() {
+  const msg = $("#bcbaChatMsg");
+  const state = loadBcbaChatState();
+  state.patient_id = $("#bcbaChatPatient")?.value || state.patient_id || "";
+  state.date_range_days = $("#bcbaChatRange")?.value || state.date_range_days || "90";
+  if (!state.patient_id) return setMessage(msg, "Select a patient before generating an ISP draft.", "error");
+  const thread = (state.messages || []).filter(m => ["user", "assistant"].includes(m.role)).slice(-14).map(m => `${m.role === "user" ? "User" : "ABA-Skilled BCBA Agent"}: ${m.text}`).join("\n\n");
+  try {
+    setMessage(msg, "Generating ISP draft from this chat and patient context...", "info");
+    const out = await api("/api/ai/workbench/isp", {
+      method: "POST",
+      body: JSON.stringify({
+        patient_id: state.patient_id,
+        date_range_days: state.date_range_days || "90",
+        question: `Generate an ISP draft using this BCBA Chat context and the selected patient's TherapyAgent record context.\n\nChat context:\n${thread}`
+      })
+    });
+    setMessage(msg, out.message || "ISP draft generated and saved.", "success");
+    if (out.isp?.id) {
+      panel("isps");
+      setTimeout(() => openResourceDetail("isps", out.isp.id), 350);
+    }
+  } catch (err) {
+    setMessage(msg, err.message, "error");
+  }
+}
+
 async function loadInbox() {
   const assigned = $("#assignedInbox"), returned = $("#returnedInbox");
   if (!assigned || !returned) return;
@@ -1835,6 +2084,13 @@ function ensureWorkspaceUiPatch() {
   if (!isWorkspacePage) return;
 
   const sidebar = $(".sidebar");
+  if (sidebar && !$('[data-panel="bcbaChat"]', sidebar)) {
+    const btn = document.createElement("button");
+    btn.dataset.panel = "bcbaChat";
+    btn.textContent = "BCBA Chat";
+    const before = $('[data-panel="isps"]', sidebar) || $('[data-panel="patients"]', sidebar) || $('[data-panel="inbox"]', sidebar);
+    sidebar.insertBefore(btn, before || null);
+  }
   if (sidebar && !$('[data-panel="isps"]', sidebar)) {
     const btn = document.createElement("button");
     btn.dataset.panel = "isps";
@@ -1844,6 +2100,15 @@ function ensureWorkspaceUiPatch() {
   }
 
   const workspace = $("#workspace");
+  if (workspace && !$("#bcbaChat")) {
+    const section = document.createElement("section");
+    section.className = "panel";
+    section.id = "bcbaChat";
+    section.innerHTML = '<div class="bcbaChatMount"></div>';
+    const isps = $("#isps");
+    const admin = $("#admin");
+    workspace.insertBefore(section, isps || admin || null);
+  }
   if (workspace && !$("#isps")) {
     const section = document.createElement("section");
     section.className = "panel resource-panel";
