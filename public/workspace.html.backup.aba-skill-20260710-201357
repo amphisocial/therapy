@@ -119,7 +119,6 @@
         <section class="ai-workbench-output" id="aiWorkbenchOutput" hidden></section>
         <section class="ai-knowledge-card">
           <h3>ABA Knowledge Base</h3>
-          <p id="aiWorkbenchSkillStatus" class="muted">Agent skill: loading...</p>
           <p>Future enhancement: upload organization-approved ABA resources, clinical templates, public-domain guidance, and licensed materials. TherapyAgent will not preload copyrighted ABA books unless your organization has rights to use them.</p>
         </section>
         <section class="ai-workbench-history">

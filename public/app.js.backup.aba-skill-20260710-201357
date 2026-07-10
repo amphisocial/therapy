@@ -902,12 +902,6 @@ function renderAiWorkbenchBootstrap(out) {
     sel.innerHTML = `<option value="">Organization-level / no single patient</option>` + (out.patients || []).map(p => `<option value="${p.id}">${escapeHtml(p.full_name)}${p.diagnosis ? ` — ${escapeHtml(p.diagnosis)}` : ""}</option>`).join("");
     sel.value = current || "";
   }
-  const skillEl = $("#aiWorkbenchSkillStatus");
-  if (skillEl) {
-    const skill = out.agent_skill || {};
-    const source = skill.source === "file" ? "file loaded" : "built-in fallback";
-    skillEl.textContent = `Agent skill: ${skill.path || "config/aba-bcba-agent.skill.md"} (${source})`;
-  }
   const hist = $("#aiWorkbenchHistory");
   if (hist) {
     const rows = (out.history || []).map(h => [

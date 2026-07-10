@@ -1,10 +1,7 @@
-TherapyAgent Compliance / Terms / BAA update
+TherapyAgent Configurable ABA Skill Update
 
-- Adds Security & Compliance public page with encryption, S3/KMS, IAM role, audit, org isolation, MFA, RBAC, authenticated downloads, and HIPAA-ready deployment language.
-- Adds Terms and Conditions page for U.S.-based therapy documentation software use.
-- Adds Business Associate Agreement template page.
-- Makes Security & Compliance, BAA Template, and Terms visible in homepage top navigation.
-- Requires public registrants to check Terms acceptance before account creation.
-- Requires org admins to attest to Terms coverage/authorized user status before creating each user.
-- Adds API-side enforcement so Terms/attestation cannot be bypassed by removing the checkbox.
-- Adds schema columns for Terms acceptance and admin attestation evidence.
+- Adds config/aba-bcba-agent.skill.md.
+- Adds ABA_AGENT_SKILL_PATH .env support.
+- AI Workbench LLM prompt now reads agent instructions from the skill file.
+- AI Workbench bootstrap reports whether the skill file was loaded or built-in fallback was used.
+- Keeps local no-PHI mode intact when ALLOW_PHI_TO_LLM=false.

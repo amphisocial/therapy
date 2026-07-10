@@ -17,7 +17,7 @@ import https from "node:https";
 import http from "node:http";
 import net from "node:net";
 import tls from "node:tls";
-import { dirname, join, isAbsolute } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,7 +27,6 @@ const PORT = Number(process.env.PORT || 3060);
 const SITE_ORIGIN = process.env.SITE_ORIGIN || "https://therapyagent.athenabot.ai";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-me";
 const ALLOW_PHI_TO_LLM = String(process.env.ALLOW_PHI_TO_LLM || "false").toLowerCase() === "true";
-const ABA_AGENT_SKILL_PATH = process.env.ABA_AGENT_SKILL_PATH || "config/aba-bcba-agent.skill.md";
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_USER = process.env.SMTP_USER || "";
@@ -1270,56 +1269,8 @@ function workbenchEvidence(ctx) {
   ev.push(`${(ctx.plans || []).length} therapy plans in selected context`);
   return ev;
 }
-
-const DEFAULT_ABA_AGENT_SKILL = `# ABA-Skilled BCBA Agent Skill
-
-You are the ABA-Skilled BCBA Agent inside TherapyAgent.
-
-You support ABA-informed documentation review, plan-preparation support, behavior pattern review, report drafting, and transparent risk-signal interpretation.
-
-You do not diagnose, prescribe treatment, determine medical necessity, make final clinical decisions, claim guaranteed prediction, or replace clinician judgment.
-
-Use only the provided TherapyAgent context and user question. Flag uncertainty and missing data. Do not fabricate patient history or citations. Treat analytics as risk signals unless the organization has validated a predictive model.
-
-Required answer structure: concise summary; evidence-linked observations; ABA-informed considerations; suggested BCBA review actions; data gaps; predictive/risk-signal considerations; clinician-review disclaimer.
-
-End with: This is clinical decision-support only and requires BCBA review.`;
-
-function resolveAppPath(configuredPath = "") {
-  return isAbsolute(configuredPath) ? configuredPath : join(__dirname, configuredPath);
-}
-
-function getAbaAgentSkill() {
-  const configuredPath = ABA_AGENT_SKILL_PATH || "config/aba-bcba-agent.skill.md";
-  try {
-    const text = readFileSync(resolveAppPath(configuredPath), "utf8");
-    return { text, path: configuredPath, source: "file" };
-  } catch (e) {
-    console.warn(`[aba-agent-skill] Could not read ${configuredPath}; using built-in fallback: ${e.message}`);
-    return { text: DEFAULT_ABA_AGENT_SKILL, path: configuredPath, source: "built_in_fallback" };
-  }
-}
-
-function loadAbaAgentSkill() {
-  return getAbaAgentSkill().text;
-}
-
 function buildAbaWorkbenchPrompt(ctx, question, mode) {
-  const skill = loadAbaAgentSkill();
-  const contextJson = JSON.stringify(ctx, null, 2).slice(0, 22000);
-  return `${skill}
-
-## TherapyAgent Runtime Instructions
-
-Current workbench mode: ${mode || "general"}
-Current user question: ${question}
-
-Use only the TherapyAgent context JSON below and the user's question. If the context is insufficient, state the gap instead of guessing.
-
-TherapyAgent context JSON:
-${contextJson}
-
-Respond using the required answer structure from the skill file. Include evidence references to TherapyAgent record types such as session logs, behavior events, incidents, therapy plans, and AI reports when applicable.`;
+  return `You are the ABA-Skilled BCBA Agent inside TherapyAgent. You support BCBAs and therapy supervisors, but you do not diagnose, prescribe treatment, determine medical necessity, or replace clinical judgment. Use only the provided TherapyAgent context. Cite evidence from the context. Flag uncertainty and missing data.\n\nMode: ${mode}\nQuestion: ${question}\n\nTherapyAgent context JSON:\n${JSON.stringify(ctx, null, 2).slice(0, 22000)}\n\nRespond with: 1) concise summary, 2) evidence-linked observations, 3) suggested BCBA review actions, 4) data gaps, 5) predictive model/risk-signal considerations. Include a clinician-review disclaimer.`;
 }
 
 app.get("/api/ai/workbench/bootstrap", requireAuth, requireMfa, requireAiWorkbenchAccess, async (req, res) => {
@@ -1332,7 +1283,7 @@ app.get("/api/ai/workbench/bootstrap", requireAuth, requireMfa, requireAiWorkben
       LEFT JOIN patients p ON p.id=h.patient_id AND p.org_id=h.org_id
       WHERE h.org_id=$1
       ORDER BY h.created_at DESC LIMIT 20`, [req.user.org_id])).rows;
-    res.json({ patients, history, agent_skill: { path: getAbaAgentSkill().path, source: getAbaAgentSkill().source } });
+    res.json({ patients, history });
   } catch (e) {
     console.error("[ai-workbench-bootstrap]", e.message);
     res.status(500).json({ error: "workbench_bootstrap_failed", message: "Could not load AI Workbench context." });

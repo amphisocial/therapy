@@ -36,7 +36,7 @@ def copy_skill_file():
     print(f'Copied configurable ABA skill file -> {dest}')
 
 
-copy_skill_file()
+#copy_skill_file()
 
 # -----------------------------------------------------------------------------
 # server.js: add configurable ABA skill loader and use it in Workbench prompt
