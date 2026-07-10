@@ -310,23 +310,3 @@ CREATE INDEX IF NOT EXISTS idx_review_history_entity ON review_history(org_id, e
 CREATE INDEX IF NOT EXISTS idx_files_org_entity ON files(org_id, entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_files_org_patient ON files(org_id, patient_id);
 CREATE INDEX IF NOT EXISTS idx_files_org_created ON files(org_id, created_at DESC);
-
-
--- AI Workbench history stores clinician-reviewed AI support interactions.
-CREATE TABLE IF NOT EXISTS ai_workbench_history (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  patient_id UUID REFERENCES patients(id) ON DELETE SET NULL,
-  mode TEXT NOT NULL DEFAULT 'general',
-  date_range_days INTEGER NOT NULL DEFAULT 90,
-  question TEXT NOT NULL,
-  response_summary TEXT NOT NULL,
-  context_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-  llm_mode TEXT NOT NULL DEFAULT 'local_no_phi',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_workbench_history_org_created ON ai_workbench_history(org_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ai_workbench_history_org_patient ON ai_workbench_history(org_id, patient_id, created_at DESC);
-

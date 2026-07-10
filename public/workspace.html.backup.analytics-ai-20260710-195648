@@ -32,8 +32,6 @@
       <aside class="sidebar">
         <h3>Workspace</h3>
         <button data-panel="dashboard" class="active">Dashboard</button>
-        <button data-panel="analytics">Data Analytics</button>
-        <button data-panel="aiWorkbench">AI Workbench</button>
         <button data-panel="patients">Patients</button>
         <button data-panel="inbox">Inbox</button>
         <button data-panel="sessions">Session Log</button>
@@ -53,78 +51,6 @@
           <div class="metric"><span id="metricReviews">0</span><label>Under review</label></div>
         </div>
         <div class="notice">Open any page on the left. Lists show saved items; double-click a row or click Open to view/edit. New creates a fresh form.</div>
-      </section>
-
-
-      <section class="panel" id="analytics">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Clinical intelligence</p>
-            <h2>Data Analytics</h2>
-          </div>
-          <button class="btn small" id="refreshAnalytics" type="button">Refresh analytics</button>
-        </div>
-        <div class="notice">Track organization trends, patient risk signals, workload, and documentation quality. Risk signals are decision-support indicators and require BCBA review.</div>
-        <div id="analyticsContent" class="analytics-content">Loading analytics...</div>
-      </section>
-
-      <section class="panel" id="aiWorkbench">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">ABA-skilled assistant</p>
-            <h2>AI Workbench</h2>
-          </div>
-          <button class="btn small" id="refreshAiWorkbench" type="button">Refresh context</button>
-        </div>
-        <div class="notice">Talk to an ABA-skilled BCBA support agent that uses TherapyAgent records as context. The agent supports clinical documentation and plan preparation, but does not replace clinician judgment.</div>
-        <section class="form-card ai-workbench-card">
-          <div class="form-grid">
-            <label>Patient context
-              <select id="aiWorkbenchPatient"><option value="">Organization-level / no single patient</option></select>
-            </label>
-            <label>Date range
-              <select id="aiWorkbenchRange">
-                <option value="30">Last 30 days</option>
-                <option value="90" selected>Last 90 days</option>
-                <option value="180">Last 180 days</option>
-                <option value="365">Last 365 days</option>
-              </select>
-            </label>
-            <label>Workbench mode
-              <select id="aiWorkbenchMode">
-                <option value="plan_review">Plan review preparation</option>
-                <option value="behavior_analysis">Behavior pattern analysis</option>
-                <option value="incident_review">Incident review</option>
-                <option value="report_drafting">Report drafting support</option>
-                <option value="predictive_signals">Predictive risk signals</option>
-                <option value="general">General BCBA question</option>
-              </select>
-            </label>
-            <label>ABA Knowledge Base
-              <select id="aiWorkbenchKnowledge">
-                <option value="patient_records">Patient records only</option>
-                <option value="org_approved" disabled>Org-approved ABA documents coming soon</option>
-              </select>
-            </label>
-            <label class="span-2">Ask the ABA-Skilled BCBA Agent
-              <textarea id="aiWorkbenchQuestion" placeholder="Example: Prepare me for this patient's plan review. What trends, antecedents, interventions, and data gaps should I consider?"></textarea>
-            </label>
-          </div>
-          <div class="form-actions">
-            <button class="btn" id="runAiWorkbench" type="button">Ask ABA-Skilled BCBA Agent</button>
-            <button class="btn secondary" id="clearAiWorkbench" type="button">Clear</button>
-          </div>
-          <div id="aiWorkbenchMsg" class="message"></div>
-        </section>
-        <section class="ai-workbench-output" id="aiWorkbenchOutput" hidden></section>
-        <section class="ai-knowledge-card">
-          <h3>ABA Knowledge Base</h3>
-          <p>Future enhancement: upload organization-approved ABA resources, clinical templates, public-domain guidance, and licensed materials. TherapyAgent will not preload copyrighted ABA books unless your organization has rights to use them.</p>
-        </section>
-        <section class="ai-workbench-history">
-          <h3>Recent AI Workbench activity</h3>
-          <div id="aiWorkbenchHistory" class="table-wrap"></div>
-        </section>
       </section>
 
       <section class="panel" id="patients">

@@ -203,9 +203,9 @@ async function insertRolePermissions(client, orgId) {
   for (const [role, enabledSet] of Object.entries(roleSets)) {
     for (const permission of permissionKeys) {
       await client.query(
-        `INSERT INTO role_permissions (org_id, role, permission_key, enabled) VALUES ($1,$2,$3,$4)
+        `INSERT INTO role_permissions (id, org_id, role, permission_key, enabled) VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (org_id, role, permission_key) DO UPDATE SET enabled=EXCLUDED.enabled, updated_at=now()`,
-        [orgId, role, permission, enabledSet.includes(permission)]
+        [uuid(), orgId, role, permission, enabledSet.includes(permission)]
       );
     }
   }

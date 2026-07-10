@@ -8,8 +8,6 @@ let attachmentSetup = null;
 let activePatient = null;
 let patientSummary = null;
 let activeVoice = null;
-let analyticsCache = null;
-let aiWorkbenchBootstrap = null;
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -523,8 +521,6 @@ function panel(id) {
   $$(".sidebar button").forEach(b => b.classList.toggle("active", b.dataset.panel === id));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
   if (id === "patients") loadPatients();
-  if (id === "analytics") loadAnalytics();
-  if (id === "aiWorkbench") loadAiWorkbench();
   if (id === "inbox") loadInbox();
   if (resourceDefs[id]) loadResourceList(id);
   if (id === "admin") loadAdmin();
@@ -821,138 +817,6 @@ async function extractFields(resource, text, root) {
   } catch (e) { console.warn(e.message); }
 }
 
-
-
-function metricHtml(label, value, helper = "") {
-  return `<div class="metric"><span>${escapeHtml(value ?? "0")}</span><label>${escapeHtml(label)}</label>${helper ? `<small>${escapeHtml(helper)}</small>` : ""}</div>`;
-}
-function miniBarTable(headers, rows) {
-  return tableHtml(headers, rows.length ? rows : []);
-}
-function riskBadge(score = 0) {
-  const n = Number(score || 0);
-  const cls = n >= 8 ? "high" : n >= 4 ? "medium" : "low";
-  const label = n >= 8 ? "High attention" : n >= 4 ? "Monitor" : "Low";
-  return `<span class="risk-badge ${cls}">${label}</span>`;
-}
-function renderAnalytics(out) {
-  const mount = $("#analyticsContent");
-  if (!mount) return;
-  const m = out.metrics || {};
-  const riskRows = (out.risk_signals || []).map(r => [
-    `<button class="link-btn" type="button" data-ai-patient-risk="${r.patient_id}">${escapeHtml(r.patient_name || "Patient")}</button>`,
-    riskBadge(r.risk_score),
-    escapeHtml(String(r.behavior_30 || 0)),
-    escapeHtml(String(r.incident_30 || 0)),
-    escapeHtml(String(r.high_incident_30 || 0)),
-    escapeHtml(String(Number(r.avg_intensity_30 || 0).toFixed(1))),
-    escapeHtml(String(r.sessions_30 || 0)),
-    escapeHtml((r.signals || []).join("; "))
-  ]);
-  const staffRows = (out.staff_workload || []).map(r => [
-    escapeHtml(r.full_name || ""), escapeHtml(r.role || ""), escapeHtml(String(r.sessions_30 || 0)), escapeHtml(String(r.behaviors_30 || 0)), escapeHtml(String(r.incidents_30 || 0)), escapeHtml(String(r.reports_30 || 0))
-  ]);
-  const behaviorRows = (out.behavior_functions || []).map(r => [escapeHtml(r.label || "Unspecified"), escapeHtml(String(r.count || 0))]);
-  const severityRows = (out.incident_severity || []).map(r => [escapeHtml(r.label || "Unspecified"), escapeHtml(String(r.count || 0))]);
-  const qualityRows = (out.data_quality || []).map(r => [escapeHtml(r.label), escapeHtml(String(r.count || 0)), escapeHtml(r.recommendation || "")]);
-
-  mount.innerHTML = `
-    <div class="metric-grid analytics-metrics">
-      ${metricHtml("Active patients", m.active_patients, "Current org")}
-      ${metricHtml("Sessions / 30d", m.sessions_30, "Completed or drafted")}
-      ${metricHtml("Behavior events / 30d", m.behaviors_30, "All intensities")}
-      ${metricHtml("Incidents / 30d", m.incidents_30, "All severities")}
-      ${metricHtml("Open incidents", m.open_incidents, "Needs follow-up")}
-      ${metricHtml("Plans expiring", m.plans_expiring_30, "Next 30 days")}
-      ${metricHtml("Reports / 30d", m.reports_30, "AI reports")}
-      ${metricHtml("Under review", m.under_review, "All record types")}
-    </div>
-    <div class="analytics-grid">
-      <section class="analytics-card span-2"><h3>Patient risk signals</h3><p class="muted">Transparent indicators based on recent behaviors, incidents, intensity, session consistency, and plan currency. Not a diagnosis or autonomous treatment decision.</p>${miniBarTable(["Patient", "Signal", "Behaviors", "Incidents", "High", "Avg intensity", "Sessions", "Evidence"], riskRows)}</section>
-      <section class="analytics-card"><h3>Behavior suspected functions</h3>${miniBarTable(["Function", "Events"], behaviorRows)}</section>
-      <section class="analytics-card"><h3>Incidents by severity</h3>${miniBarTable(["Severity", "Incidents"], severityRows)}</section>
-      <section class="analytics-card span-2"><h3>Staff workload / 30 days</h3>${miniBarTable(["User", "Role", "Sessions", "Behaviors", "Incidents", "Reports"], staffRows)}</section>
-      <section class="analytics-card span-2"><h3>Compliance and data quality</h3>${miniBarTable(["Check", "Count", "Recommended action"], qualityRows)}</section>
-    </div>`;
-  $$(`[data-ai-patient-risk]`, mount).forEach(b => b.onclick = () => {
-    panel("aiWorkbench");
-    setTimeout(() => {
-      const sel = $("#aiWorkbenchPatient");
-      if (sel) sel.value = b.dataset.aiPatientRisk;
-      const q = $("#aiWorkbenchQuestion");
-      if (q) q.value = "Prepare a BCBA plan review briefing for this patient. Highlight behavior trends, incident risk, possible antecedent/function patterns, intervention response, and data gaps.";
-    }, 300);
-  });
-}
-async function loadAnalytics() {
-  const mount = $("#analyticsContent");
-  if (!mount) return;
-  mount.innerHTML = "Loading analytics...";
-  try {
-    analyticsCache = await api("/api/analytics/dashboard");
-    renderAnalytics(analyticsCache);
-  } catch (e) {
-    mount.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
-  }
-}
-function renderAiWorkbenchBootstrap(out) {
-  const sel = $("#aiWorkbenchPatient");
-  if (sel) {
-    const current = sel.value;
-    sel.innerHTML = `<option value="">Organization-level / no single patient</option>` + (out.patients || []).map(p => `<option value="${p.id}">${escapeHtml(p.full_name)}${p.diagnosis ? ` — ${escapeHtml(p.diagnosis)}` : ""}</option>`).join("");
-    sel.value = current || "";
-  }
-  const hist = $("#aiWorkbenchHistory");
-  if (hist) {
-    const rows = (out.history || []).map(h => [
-      fmtDate(h.created_at), escapeHtml(h.patient_name || "Org-level"), escapeHtml(h.mode || ""), escapeHtml(String(h.date_range_days || "")), escapeHtml(h.question || "")
-    ]);
-    hist.innerHTML = tableHtml(["Date", "Context", "Mode", "Days", "Question"], rows);
-  }
-}
-async function loadAiWorkbench() {
-  try {
-    aiWorkbenchBootstrap = await api("/api/ai/workbench/bootstrap");
-    renderAiWorkbenchBootstrap(aiWorkbenchBootstrap);
-  } catch (e) {
-    setMessage($("#aiWorkbenchMsg"), e.message, "error");
-  }
-}
-function renderWorkbenchResponse(out) {
-  const el = $("#aiWorkbenchOutput");
-  if (!el) return;
-  el.hidden = false;
-  const evidence = (out.evidence || []).map(x => `<li>${escapeHtml(x)}</li>`).join("");
-  el.innerHTML = `
-    <div class="ai-answer-head"><p class="eyebrow">${escapeHtml(out.agent || "ABA-Skilled BCBA Agent")}</p><h3>Workbench response</h3><span class="risk-badge ${out.mode === "llm" ? "medium" : "low"}">${escapeHtml(out.mode === "llm" ? "LLM assisted" : "Local no-PHI mode")}</span></div>
-    <div class="ai-answer-body">${escapeHtml(out.answer || "").replace(/\n/g, "<br>")}</div>
-    ${evidence ? `<div class="ai-evidence"><h4>Evidence used</h4><ul>${evidence}</ul></div>` : ""}
-    <p class="muted">Outputs require clinician review. TherapyAgent does not diagnose, prescribe treatment, or replace BCBA judgment.</p>`;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-async function runAiWorkbench() {
-  const msg = $("#aiWorkbenchMsg");
-  const question = ($("#aiWorkbenchQuestion")?.value || "").trim();
-  if (!question) return setMessage(msg, "Enter a question for the ABA-Skilled BCBA Agent.", "error");
-  try {
-    setMessage(msg, "Building patient context and generating response...", "info");
-    const out = await api("/api/ai/workbench", {
-      method: "POST",
-      body: JSON.stringify({
-        patient_id: $("#aiWorkbenchPatient")?.value || "",
-        date_range_days: $("#aiWorkbenchRange")?.value || "90",
-        mode: $("#aiWorkbenchMode")?.value || "general",
-        question
-      })
-    });
-    setMessage(msg, out.message || "Response generated.", "success");
-    renderWorkbenchResponse(out);
-    await loadAiWorkbench();
-  } catch (e) {
-    setMessage(msg, e.message, "error");
-  }
-}
-
 async function loadInbox() {
   const assigned = $("#assignedInbox"), returned = $("#returnedInbox");
   if (!assigned || !returned) return;
@@ -1073,10 +937,6 @@ $$(".auth-tab").forEach(b => b.addEventListener("click", () => setAuthScreen(b.d
 $("#goLoginAfterMfa")?.addEventListener("click", () => setAuthScreen("login"));
 $("#logoutBtn")?.addEventListener("click", logout);
 $("#refreshAll")?.addEventListener("click", async () => { await loadPatients(); await refreshDashboard(); });
-$("#refreshAnalytics")?.addEventListener("click", loadAnalytics);
-$("#refreshAiWorkbench")?.addEventListener("click", loadAiWorkbench);
-$("#runAiWorkbench")?.addEventListener("click", runAiWorkbench);
-$("#clearAiWorkbench")?.addEventListener("click", () => { $("#aiWorkbenchQuestion") && ($("#aiWorkbenchQuestion").value = ""); $("#aiWorkbenchOutput") && ($("#aiWorkbenchOutput").hidden = true); setMessage($("#aiWorkbenchMsg"), ""); });
 $("#refreshInbox")?.addEventListener("click", loadInbox);
 $("#refreshAdmin")?.addEventListener("click", loadAdmin);
 $("#saveRoleMatrix")?.addEventListener("click", saveRoleMatrix);
