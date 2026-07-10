@@ -11,6 +11,7 @@ let activeVoice = null;
 let analyticsCache = null;
 let aiWorkbenchBootstrap = null;
 let globalSearchTimer = null;
+let globalSearchModalQuery = "";
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -406,58 +407,359 @@ function logout() {
 }
 
 function renderMfaOptionalBanner() {
-  let banner = document.getElementById("mfaOptionalBanner");
-  if (!currentUser || currentUser.mfa_enabled || currentUser.must_change_password) {
-    if (banner) banner.remove();
+  const oldBanner = document.getElementById("mfaOptionalBanner");
+  if (oldBanner) oldBanner.remove();
+
+  const existing = document.getElementById("mfaSetupIcon");
+  if (!isWorkspacePage || !currentUser || currentUser.mfa_enabled || currentUser.must_change_password) {
+    if (existing) existing.remove();
     return;
   }
-  const workspace = $("#workspace");
-  if (!workspace) return;
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "mfaOptionalBanner";
-    banner.className = "notice";
-    banner.style.gridColumn = "1 / -1";
-    banner.style.marginBottom = "14px";
-    workspace.prepend(banner);
+
+  const nav = document.getElementById("userNav");
+  if (!nav) return;
+
+  let btn = existing;
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "mfaSetupIcon";
+    btn.type = "button";
+    btn.className = "btn small secondary ta-icon-btn";
+    btn.title = "Set up MFA";
+    btn.innerHTML = "⚠ MFA";
+    const logout = document.getElementById("logoutBtn");
+    if (logout) nav.insertBefore(btn, logout);
+    else nav.appendChild(btn);
   }
-  const setupKey = currentUser.mfaSetup?.secret || "";
-  banner.innerHTML = `
-    <strong>MFA is optional but recommended.</strong>
-    <p style="margin:8px 0 10px">
-      To enable MFA, open Google Authenticator, Microsoft Authenticator, or Authy,
-      choose <b>Add account</b>, then choose <b>Enter setup key manually</b>.
-    </p>
-    ${setupKey ? `<code>${escapeHtml(setupKey)}</code>` : `<p>Setup key is not available. Ask your admin to reset MFA for this account.</p>`}
-    <div class="form-actions">
-      <label style="max-width:260px">6-digit MFA code
-        <input id="mfaOptionalTotp" inputmode="numeric" placeholder="123456">
-      </label>
-      <button class="btn small" id="enableOptionalMfa" type="button">Enable MFA</button>
-      <span id="mfaOptionalMsg" style="font-weight:700"></span>
-    </div>
-  `;
-  $("#enableOptionalMfa")?.addEventListener("click", async () => {
-    const msg = $("#mfaOptionalMsg");
-    const totp = $("#mfaOptionalTotp")?.value || "";
-    if (!totp.trim()) {
-      msg.textContent = "Enter the 6-digit code from your authenticator app.";
-      return;
+  btn.onclick = showMfaSetupModal;
+}
+
+function ensureProfessionalStyles() {
+  if (document.getElementById("taProfessionalStyles")) return;
+  const style = document.createElement("style");
+  style.id = "taProfessionalStyles";
+  style.textContent = `
+    .ta-icon-btn { white-space: nowrap; }
+    .ta-modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,.52); z-index:9998; display:flex; align-items:flex-start; justify-content:center; overflow:auto; padding:48px 18px; }
+    .ta-modal-card { width:min(1040px, 96vw); background:white; border-radius:22px; box-shadow:0 28px 80px rgba(15,23,42,.28); padding:0; overflow:hidden; }
+    .ta-modal-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:22px 26px; border-bottom:1px solid rgba(15,23,42,.1); background:linear-gradient(135deg, rgba(37,99,235,.08), rgba(14,165,233,.08)); }
+    .ta-modal-head h2 { margin:0; font-size:1.35rem; }
+    .ta-modal-head p { margin:.35rem 0 0; color:#475569; }
+    .ta-modal-close { border:0; background:transparent; font-size:28px; line-height:1; cursor:pointer; color:#334155; }
+    .ta-modal-body { padding:24px 26px; }
+    .ta-modal-actions { display:flex; flex-wrap:wrap; gap:10px; padding:18px 26px; border-top:1px solid rgba(15,23,42,.1); background:#f8fafc; }
+    .ta-search-launcher { display:flex; gap:8px; align-items:center; min-width:300px; }
+    .ta-search-launcher input { margin:0; height:36px; }
+    .ta-search-results { display:grid; gap:16px; margin-top:16px; }
+    .ta-search-card { border:1px solid rgba(15,23,42,.12); border-radius:16px; padding:16px; background:#fff; }
+    .ta-search-card h3 { margin:0 0 4px; }
+    .ta-count-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .ta-count-pill { border:1px solid rgba(15,23,42,.12); border-radius:999px; padding:4px 10px; font-size:.82rem; color:#334155; background:#f8fafc; }
+    .ta-record-grid { display:grid; gap:12px; }
+    .ta-record-section { border:1px solid rgba(15,23,42,.1); border-radius:14px; overflow:hidden; }
+    .ta-record-section h4 { margin:0; padding:10px 12px; background:#f8fafc; border-bottom:1px solid rgba(15,23,42,.08); }
+    .ta-summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; }
+    .ta-summary-item { border:1px solid rgba(15,23,42,.1); border-radius:12px; padding:12px; background:#fff; }
+    .ta-summary-item strong { display:block; color:#0f172a; margin-bottom:5px; }
+    .ta-summary-item span { white-space:pre-wrap; color:#334155; }
+    @media (max-width: 820px) {
+      .ta-search-launcher { min-width:100%; width:100%; }
+      #userNav { flex-wrap:wrap; }
     }
+  `;
+  document.head.appendChild(style);
+}
+
+function closeProfessionalModal(id = "taProfessionalModal") {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+function openProfessionalModal({ id = "taProfessionalModal", title = "", subtitle = "", body = "", actions = "" } = {}) {
+  ensureProfessionalStyles();
+  closeProfessionalModal(id);
+  const wrap = document.createElement("div");
+  wrap.id = id;
+  wrap.className = "ta-modal-backdrop";
+  wrap.innerHTML = `
+    <section class="ta-modal-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <header class="ta-modal-head">
+        <div><h2>${escapeHtml(title)}</h2>${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}</div>
+        <button class="ta-modal-close" type="button" aria-label="Close">×</button>
+      </header>
+      <div class="ta-modal-body">${body}</div>
+      ${actions ? `<footer class="ta-modal-actions">${actions}</footer>` : ""}
+    </section>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector(".ta-modal-close").onclick = () => closeProfessionalModal(id);
+  wrap.addEventListener("click", e => {
+    if (e.target === wrap) closeProfessionalModal(id);
+  });
+  return wrap;
+}
+
+function showMfaSetupModal() {
+  const setupKey = currentUser?.mfaSetup?.secret || "";
+  const body = `
+    <div class="notice">
+      <strong>MFA is optional but recommended.</strong>
+      <p>Open Google Authenticator, Microsoft Authenticator, or Authy. Choose <b>Add account</b>, then <b>Enter setup key manually</b>.</p>
+    </div>
+    <div class="form-card" style="margin-top:16px">
+      <label>Setup key
+        <input readonly value="${escapeHtml(setupKey || "Setup key is not available. Ask your admin to reset MFA.")}">
+      </label>
+      <label>6-digit MFA code
+        <input id="mfaModalTotp" inputmode="numeric" placeholder="123456">
+      </label>
+      <div id="mfaModalMsg" class="message"></div>
+    </div>`;
+  const modal = openProfessionalModal({
+    id: "mfaSetupModal",
+    title: "Set up multi-factor authentication",
+    subtitle: "Protect your TherapyAgent account with an authenticator app.",
+    body,
+    actions: `<button class="btn" id="enableMfaFromModal" type="button">Enable MFA</button><button class="btn secondary" type="button" id="closeMfaModal">Close</button>`
+  });
+  modal.querySelector("#closeMfaModal").onclick = () => closeProfessionalModal("mfaSetupModal");
+  modal.querySelector("#enableMfaFromModal").onclick = async () => {
+    const msg = modal.querySelector("#mfaModalMsg");
+    const totp = modal.querySelector("#mfaModalTotp")?.value || "";
+    if (!totp.trim()) return setMessage(msg, "Enter the 6-digit code from your authenticator app.", "error");
     try {
-      const out = await api("/api/mfa/enable", {
-        method: "POST",
-        body: JSON.stringify({ totp })
-      });
+      setMessage(msg, "Verifying MFA code...", "info");
+      const out = await api("/api/mfa/enable", { method: "POST", body: JSON.stringify({ totp }) });
       token = out.token;
       localStorage.setItem("ta_token", token);
       currentUser = { ...(out.user || {}), mfaSetup: null };
-      setAuthenticatedUI();
+      setMessage(msg, out.message || "MFA enabled.", "success");
+      setTimeout(() => {
+        closeProfessionalModal("mfaSetupModal");
+        setAuthenticatedUI();
+      }, 800);
     } catch (e) {
-      msg.textContent = e.message;
+      setMessage(msg, e.message, "error");
     }
-  });
+  };
 }
+
+function isExportableResource(resource) {
+  return resource === "isps" || resource === "reports";
+}
+
+function exportTitle(resource, item = {}) {
+  if (resource === "isps") return item.title || "Individual Service Plan";
+  if (resource === "reports") return `${item.report_type || "AI Report"} ${item.created_at ? dateInput(item.created_at) : ""}`.trim();
+  return item.title || "TherapyAgent Export";
+}
+
+function resourceFieldRows(resource, item = {}) {
+  const def = resourceDefs[resource];
+  if (!def) return [];
+  return def.fields
+    .filter(f => f.name !== "patient_id")
+    .map(f => {
+      let value = item[f.name];
+      if (structuredIspFields.has(f.name) || f.type === "structured_text") value = cleanStructuredText(value, f.name);
+      else if (cleanIspTextFields.has(f.name) || f.type === "clean_text") value = cleanPlainText(value, f.name);
+      else if (f.type === "checkbox") value = value ? "Yes" : "No";
+      else value = formatJsonish(value);
+      return [fieldLabel(f), value || ""];
+    })
+    .filter(([, value]) => String(value || "").trim());
+}
+
+function patientDisplayForItem(item = {}) {
+  return patientName(item) || patients.find(p => p.id === item.patient_id)?.full_name || "";
+}
+
+function exportHtml(resource, item = {}) {
+  const title = exportTitle(resource, item);
+  const appLink = window.location.origin || "https://therapyagent.athenabot.ai";
+  const rows = resourceFieldRows(resource, item);
+  const patient = patientDisplayForItem(item);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;line-height:1.45;margin:40px}
+      .brand{border-bottom:3px solid #2563eb;padding-bottom:16px;margin-bottom:24px}
+      .brand h1{margin:0;font-size:26px}
+      .brand p{margin:5px 0;color:#475569}
+      h2{font-size:20px;margin:24px 0 12px;color:#0f172a}
+      .meta{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:20px}
+      .section{break-inside:avoid;margin:14px 0;padding:14px;border:1px solid #e2e8f0;border-radius:12px}
+      .section h3{margin:0 0 8px;font-size:15px;color:#1e293b}
+      .section div{white-space:pre-wrap}
+      .footer{margin-top:30px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px}
+      a{color:#2563eb}
+    </style></head><body>
+    <div class="brand">
+      <h1>TherapyAgent</h1>
+      <p>Secure clinical documentation workspace</p>
+      <p><a href="${escapeHtml(appLink)}">${escapeHtml(appLink)}</a></p>
+    </div>
+    <h2>${escapeHtml(title)}</h2>
+    <div class="meta">
+      <strong>Patient:</strong> ${escapeHtml(patient || "Not specified")}<br>
+      <strong>Status:</strong> ${escapeHtml(item.status || "Draft")}<br>
+      <strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}<br>
+      <strong>Generated from:</strong> <a href="${escapeHtml(appLink)}">${escapeHtml(appLink)}</a>
+    </div>
+    ${rows.map(([label, value]) => `<section class="section"><h3>${escapeHtml(label)}</h3><div>${escapeHtml(value)}</div></section>`).join("")}
+    <div class="footer">Draft/export generated by TherapyAgent. Outputs require clinician review. TherapyAgent does not diagnose, prescribe treatment, or replace BCBA judgment.</div>
+  </body></html>`;
+}
+
+function exportPdf(resource, item) {
+  const html = exportHtml(resource, item);
+  const w = window.open("", "_blank", "noopener,noreferrer");
+  if (!w) return alert("Popup blocked. Allow popups for TherapyAgent to export PDF.");
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => {
+    try { w.focus(); w.print(); } catch {}
+  }, 300);
+}
+
+function xmlEscape(value = "") {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function wordParagraph(text = "", style = "") {
+  const lines = String(text || "").split(/\n/);
+  return lines.map(line => `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ""}<w:r><w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`).join("");
+}
+
+function crc32(bytes) {
+  const table = crc32.table || (crc32.table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    return c >>> 0;
+  }));
+  let c = 0 ^ -1;
+  for (let i = 0; i < bytes.length; i++) c = (c >>> 8) ^ table[(c ^ bytes[i]) & 0xff];
+  return (c ^ -1) >>> 0;
+}
+
+function u16(n) { return [n & 255, (n >>> 8) & 255]; }
+function u32(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+function utf8Bytes(str) { return new TextEncoder().encode(str); }
+
+function zipStored(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = utf8Bytes(f.name);
+    const data = utf8Bytes(f.content);
+    const crc = crc32(data);
+    const local = new Uint8Array([
+      ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0)
+    ]);
+    chunks.push(local, name, data);
+    const cen = new Uint8Array([
+      ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0),
+      ...u16(0), ...u16(0), ...u32(0), ...u32(offset)
+    ]);
+    central.push(cen, name);
+    offset += local.length + name.length + data.length;
+  }
+  const centralSize = central.reduce((sum, c) => sum + c.length, 0);
+  const end = new Uint8Array([
+    ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length),
+    ...u32(centralSize), ...u32(offset), ...u16(0)
+  ]);
+  return new Blob([...chunks, ...central, end], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+function exportDocx(resource, item) {
+  const title = exportTitle(resource, item);
+  const appLink = window.location.origin || "https://therapyagent.athenabot.ai";
+  const rows = resourceFieldRows(resource, item);
+  const bodyXml = [
+    wordParagraph("TherapyAgent", "Title"),
+    wordParagraph("Secure clinical documentation workspace"),
+    wordParagraph(appLink),
+    wordParagraph(title, "Heading1"),
+    wordParagraph(`Patient: ${patientDisplayForItem(item) || "Not specified"}`),
+    wordParagraph(`Status: ${item.status || "Draft"}`),
+    wordParagraph(`Generated: ${new Date().toLocaleString()}`),
+    ...rows.flatMap(([label, value]) => [wordParagraph(label, "Heading2"), wordParagraph(value)]),
+    wordParagraph("Draft/export generated by TherapyAgent. Outputs require clinician review. TherapyAgent does not diagnose, prescribe treatment, or replace BCBA judgment.")
+  ].join("");
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>${bodyXml}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body>
+    </w:document>`;
+  const files = [
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
+    { name: "word/document.xml", content: documentXml }
+  ];
+  const blob = zipStored(files);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${safeDownloadName(title)}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeDownloadName(name = "therapyagent-export") {
+  return String(name || "therapyagent-export").replace(/[^a-z0-9._-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 90) || "therapyagent-export";
+}
+
+async function openResourceDetailModal(resource, id) {
+  const def = resourceDefs[resource];
+  if (!def) return alert("Unknown resource.");
+  try {
+    const out = await api(`${def.endpoint}/${id}`);
+    const item = out[def.singular] || {};
+    item.__history = out.history || [];
+    const title = `${def.title.replace(/s$/, "")}: ${globalResourceTitle(resource, item)}`;
+    const rows = resourceFieldRows(resource, item);
+    const body = `
+      <div class="ta-summary-grid">
+        <div class="ta-summary-item"><strong>Patient</strong><span>${escapeHtml(patientDisplayForItem(item) || "Not specified")}</span></div>
+        <div class="ta-summary-item"><strong>Status</strong><span>${statusBadge(item.status || "Draft")}</span></div>
+        <div class="ta-summary-item"><strong>Date</strong><span>${escapeHtml(dateInput(globalResourceDate(item)) || fmtDate(globalResourceDate(item)))}</span></div>
+        <div class="ta-summary-item"><strong>Created By</strong><span>${escapeHtml(item.created_by_name || item.user_name || "")}</span></div>
+      </div>
+      <div class="ta-record-grid" style="margin-top:16px">
+        ${rows.map(([label, value]) => `<section class="ta-record-section"><h4>${escapeHtml(label)}</h4><div style="padding:12px;white-space:pre-wrap">${escapeHtml(value)}</div></section>`).join("") || `<div class="empty">No details available.</div>`}
+      </div>`;
+    const exportActions = isExportableResource(resource)
+      ? `<button class="btn secondary" type="button" id="modalExportDocx">Export DOCX</button><button class="btn secondary" type="button" id="modalExportPdf">Export PDF</button>`
+      : "";
+    const modal = openProfessionalModal({
+      id: "resourcePreviewModal",
+      title,
+      subtitle: "Preview record without leaving your current workspace context.",
+      body,
+      actions: `${exportActions}<button class="btn" type="button" id="modalOpenFullRecord">Open full record</button><button class="btn secondary" type="button" id="modalCloseRecord">Close</button>`
+    });
+    modal.querySelector("#modalCloseRecord").onclick = () => closeProfessionalModal("resourcePreviewModal");
+    modal.querySelector("#modalOpenFullRecord").onclick = () => {
+      closeProfessionalModal("resourcePreviewModal");
+      panel(resource);
+      setTimeout(() => openResourceDetail(resource, id), 150);
+    };
+    modal.querySelector("#modalExportDocx")?.addEventListener("click", () => exportDocx(resource, item));
+    modal.querySelector("#modalExportPdf")?.addEventListener("click", () => exportPdf(resource, item));
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 
 
 async function loadAttachmentSetup() {
@@ -802,7 +1104,7 @@ function renderPatientTab(resource) {
   const html = `<div class="subhead"><h3>${def.title}</h3><button class="btn small" data-new-for-patient="${resource}">New ${def.singular}</button></div>` + resourceTable(resource, rows, true);
   $("#patientTabContent").innerHTML = html;
   $("[data-new-for-patient]")?.addEventListener("click", () => { panel(resource); renderResourceDetail(resource, { patient_id: activePatient.id, status: "draft" }, true); });
-  $$(`[data-open-resource]`, $("#patientTabContent")).forEach(b => b.onclick = () => { panel(b.dataset.resource); openResourceDetail(b.dataset.resource, b.dataset.id); });
+  $$(`[data-open-resource]`, $("#patientTabContent")).forEach(b => b.onclick = () => openResourceDetailModal(b.dataset.resource, b.dataset.id));
 }
 
 function tableHtml(headers, rows) {
@@ -832,9 +1134,9 @@ async function loadResourceList(resource) {
     const out = await api(def.endpoint);
     const rows = out[def.listKey] || [];
     mount.querySelector(`#${resource}List`).innerHTML = resourceTable(resource, rows);
-    $$(`[data-open-resource]`, mount).forEach(b => b.onclick = () => openResourceDetail(b.dataset.resource, b.dataset.id));
+    $$(`[data-open-resource]`, mount).forEach(b => b.onclick = () => openResourceDetailModal(b.dataset.resource, b.dataset.id));
     $$(`[data-delete-resource]`, mount).forEach(b => b.onclick = () => deleteResource(b.dataset.deleteResource, b.dataset.id));
-    $$(`tbody tr`, mount.querySelector(`#${resource}List`)).forEach((tr, i) => tr.ondblclick = () => rows[i] && openResourceDetail(resource, rows[i].id));
+    $$(`tbody tr`, mount.querySelector(`#${resource}List`)).forEach((tr, i) => tr.ondblclick = () => rows[i] && openResourceDetailModal(resource, rows[i].id));
   } catch (e) { mount.querySelector(`#${resource}List`).innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
 }
 async function openResourceDetail(resource, id) {
@@ -895,6 +1197,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
         ${!disabled ? `<button class="btn" data-save-resource="${resource}">${isNew ? "Save" : "Save changes"}</button><button class="btn secondary" type="button" data-cancel-edit="${resource}">Cancel</button>` : ""}
         ${!isNew ? `<button class="btn secondary" type="button" data-submit-review="${resource}">Send for Review</button>` : ""}
         ${!isNew && canActOnReview(item) ? `<button class="btn" type="button" data-approve-review="${resource}">Approve</button><button class="btn secondary danger" type="button" data-reject-review="${resource}">Reject</button>` : ""}
+        ${!isNew && isExportableResource(resource) ? `<button class="btn secondary" type="button" data-export-docx="${resource}">Export DOCX</button><button class="btn secondary" type="button" data-export-pdf="${resource}">Export PDF</button>` : ""}
         ${!isNew && isAdmin() ? `<button class="btn secondary danger" type="button" data-delete-detail="${resource}">Delete</button>` : ""}
       </div>
       <div class="review-box" id="${resource}ReviewBox" hidden></div>
@@ -915,6 +1218,8 @@ function renderResourceDetail(resource, item = {}, editing = false) {
   detail.querySelector(`[data-stop-voice]`)?.addEventListener("click", e => { e.preventDefault(); stopVoice(); });
   detail.querySelector(`[data-upload-attachment]`)?.addEventListener("click", e => { e.preventDefault(); uploadAttachment(resource, item.id, detail); });
   detail.querySelector(`[data-save-report-s3]`)?.addEventListener("click", e => { e.preventDefault(); saveReportFileToS3(item.id); });
+  detail.querySelector(`[data-export-docx]`)?.addEventListener("click", e => { e.preventDefault(); exportDocx(resource, item); });
+  detail.querySelector(`[data-export-pdf]`)?.addEventListener("click", e => { e.preventDefault(); exportPdf(resource, item); });
   if (item.id) loadAttachments(resource, item.id);
 }
 function canActOnReview(item) { return item?.status === "Under Review" && (item.review_assigned_to === currentUser?.id || isAdmin()); }
@@ -1033,50 +1338,76 @@ async function extractFields(resource, text, root) {
 
 
 function ensureGlobalPatientSearch() {
-  const existing = document.getElementById("globalPatientSearchBox");
   if (!isWorkspacePage || !currentUser || currentUser?.must_change_password) {
-    if (existing) existing.remove();
+    document.getElementById("globalPatientSearchLauncher")?.remove();
+    document.getElementById("globalPatientSearchBox")?.remove();
+    closeProfessionalModal("globalPatientSearchModal");
     return;
   }
-  if (existing) return;
+  ensureProfessionalStyles();
+  const nav = document.getElementById("userNav");
+  if (!nav) return;
+  if (document.getElementById("globalPatientSearchLauncher")) return;
 
-  const workspace = document.getElementById("workspace");
-  if (!workspace) return;
+  const launcher = document.createElement("div");
+  launcher.id = "globalPatientSearchLauncher";
+  launcher.className = "ta-search-launcher";
+  launcher.innerHTML = `
+    <input id="globalPatientSearchTopInput" type="search" placeholder="Search patients..." autocomplete="off" aria-label="Search patients">
+    <button class="btn small" id="globalPatientSearchTopBtn" type="button">Search</button>`;
+  nav.insertBefore(launcher, nav.firstChild);
 
-  const search = document.createElement("section");
-  search.id = "globalPatientSearchBox";
-  search.className = "notice global-patient-search";
-  search.style.gridColumn = "1 / -1";
-  search.style.marginBottom = "14px";
-  search.innerHTML = `
-    <div class="global-search-head" style="display:flex;gap:12px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
-      <div style="flex:1;min-width:280px">
-        <label style="font-weight:800">Patient Search
-          <input id="globalPatientSearchInput" type="search" placeholder="Search patient name, MRN, guardian, diagnosis..." autocomplete="off" style="margin-top:6px">
-        </label>
-        <small class="muted">Search a patient and view linked sessions, behavior events, incidents, therapy plans, ISPs, AI reports, and file metadata.</small>
-      </div>
-      <button class="btn small secondary" type="button" id="clearGlobalPatientSearch">Clear</button>
-    </div>
-    <div id="globalPatientSearchMsg" class="message"></div>
-    <div id="globalPatientSearchResults" class="table-wrap" hidden></div>
-  `;
-
-  workspace.prepend(search);
-
-  const input = search.querySelector("#globalPatientSearchInput");
-  const clear = search.querySelector("#clearGlobalPatientSearch");
-  input?.addEventListener("input", () => {
+  const input = launcher.querySelector("#globalPatientSearchTopInput");
+  const run = () => openGlobalPatientSearchModal(input.value);
+  launcher.querySelector("#globalPatientSearchTopBtn").onclick = run;
+  input.onkeydown = e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      run();
+    }
+  };
+  input.addEventListener("input", () => {
     clearTimeout(globalSearchTimer);
-    globalSearchTimer = setTimeout(() => runGlobalPatientSearch(input.value), 250);
-  });
-  clear?.addEventListener("click", () => {
-    input.value = "";
-    setMessage(search.querySelector("#globalPatientSearchMsg"), "");
-    const results = search.querySelector("#globalPatientSearchResults");
-    if (results) { results.hidden = true; results.innerHTML = ""; }
+    const q = input.value.trim();
+    if (q.length >= 2) globalSearchTimer = setTimeout(() => openGlobalPatientSearchModal(q), 450);
   });
 }
+
+function openGlobalPatientSearchModal(query = "") {
+  if (!isWorkspacePage || !currentUser) return;
+  globalSearchModalQuery = String(query || "").trim();
+  const modal = openProfessionalModal({
+    id: "globalPatientSearchModal",
+    title: "Patient Search",
+    subtitle: "Search a patient and review all linked TherapyAgent records in one focused view.",
+    body: `
+      <div class="form-card">
+        <label>Patient name, MRN, guardian, diagnosis, or insurance
+          <input id="globalPatientSearchInput" type="search" value="${escapeHtml(globalSearchModalQuery)}" placeholder="Start typing a patient name..." autocomplete="off">
+        </label>
+        <div id="globalPatientSearchMsg" class="message"></div>
+      </div>
+      <div id="globalPatientSearchResults" class="ta-search-results"></div>`,
+    actions: `<button class="btn" id="globalPatientSearchRun" type="button">Search</button><button class="btn secondary" id="globalPatientSearchClose" type="button">Close</button>`
+  });
+  const input = modal.querySelector("#globalPatientSearchInput");
+  const run = () => runGlobalPatientSearch(input.value);
+  modal.querySelector("#globalPatientSearchRun").onclick = run;
+  modal.querySelector("#globalPatientSearchClose").onclick = () => closeProfessionalModal("globalPatientSearchModal");
+  input.onkeydown = e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      run();
+    }
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(globalSearchTimer);
+    globalSearchTimer = setTimeout(() => runGlobalPatientSearch(input.value), 350);
+  });
+  setTimeout(() => input.focus(), 50);
+  if (globalSearchModalQuery.length >= 2) runGlobalPatientSearch(globalSearchModalQuery);
+}
+
 
 function globalPatientMatchText(p = {}) {
   return [
@@ -1091,33 +1422,31 @@ function globalPatientMatchText(p = {}) {
 }
 
 async function runGlobalPatientSearch(rawQuery = "") {
-  const box = document.getElementById("globalPatientSearchBox");
-  if (!box || !isWorkspacePage || !currentUser) return;
-  const msg = box.querySelector("#globalPatientSearchMsg");
-  const results = box.querySelector("#globalPatientSearchResults");
+  const modal = document.getElementById("globalPatientSearchModal");
+  if (!modal || !isWorkspacePage || !currentUser) return;
+  const msg = modal.querySelector("#globalPatientSearchMsg");
+  const results = modal.querySelector("#globalPatientSearchResults");
   const q = String(rawQuery || "").trim().toLowerCase();
 
   if (!q) {
     setMessage(msg, "");
-    if (results) { results.hidden = true; results.innerHTML = ""; }
+    if (results) results.innerHTML = `<div class="empty">Search for a patient to see linked records.</div>`;
     return;
   }
   if (q.length < 2) {
     setMessage(msg, "Type at least 2 characters to search patients.", "info");
-    if (results) { results.hidden = true; results.innerHTML = ""; }
+    if (results) results.innerHTML = "";
     return;
   }
 
   try {
     setMessage(msg, "Searching patient records...", "info");
     if (!patients.length) await loadPatients();
-    const matches = patients
-      .filter(p => globalPatientMatchText(p).includes(q))
-      .slice(0, 8);
+    const matches = patients.filter(p => globalPatientMatchText(p).includes(q)).slice(0, 8);
 
     if (!matches.length) {
       setMessage(msg, "No matching patients found.", "warning");
-      if (results) { results.hidden = false; results.innerHTML = `<div class="empty">No matching patients found.</div>`; }
+      if (results) results.innerHTML = `<div class="empty">No matching patients found.</div>`;
       return;
     }
 
@@ -1154,30 +1483,37 @@ function globalResourceTitle(resource, row = {}) {
 
 function globalSearchRecordRows(summary = {}) {
   const resources = ["sessions", "behaviors", "plans", "isps", "incidents", "reports"];
+  const labels = {
+    sessions: "Session Log",
+    behaviors: "Behavior Event",
+    plans: "Therapy Plan",
+    isps: "ISP",
+    incidents: "Incident",
+    reports: "AI Report"
+  };
   const rows = [];
   for (const resource of resources) {
-    const def = resourceDefs[resource];
-    if (!def) continue;
     for (const row of summary[resource] || []) {
-      rows.push([
-        escapeHtml(def.title),
-        statusBadge(row.status || "draft"),
-        escapeHtml(dateInput(globalResourceDate(row)) || fmtDate(globalResourceDate(row))),
-        escapeHtml(globalResourceTitle(resource, row)),
-        escapeHtml(row.created_by_name || row.user_name || ""),
-        `<button class="link-btn" type="button" data-global-open-resource="${resource}" data-id="${row.id}">Open</button>`
-      ]);
+      rows.push({
+        resource,
+        label: labels[resource] || resource,
+        status: row.status || "",
+        date: globalResourceDate(row),
+        title: globalResourceTitle(resource, row),
+        created_by_name: row.created_by_name || row.user_name || "",
+        id: row.id
+      });
     }
   }
-  return rows;
+  rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return rows.slice(0, 60);
 }
 
 function renderGlobalPatientSearchResults(items = []) {
-  const box = document.getElementById("globalPatientSearchBox");
-  const results = box?.querySelector("#globalPatientSearchResults");
+  const modal = document.getElementById("globalPatientSearchModal");
+  const results = modal?.querySelector("#globalPatientSearchResults");
   if (!results) return;
 
-  results.hidden = false;
   results.innerHTML = items.map(({ patient, summary, error }) => {
     const name = fullPatientName(patient);
     const counts = summary ? [
@@ -1189,31 +1525,35 @@ function renderGlobalPatientSearchResults(items = []) {
       ["Reports", (summary.reports || []).length]
     ] : [];
     const rows = summary ? globalSearchRecordRows(summary) : [];
-    return `<section class="search-result-card" style="margin:14px 0;padding:14px;border:1px solid rgba(15,23,42,.12);border-radius:14px;background:white">
+    return `<section class="ta-search-card">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
-          <h3 style="margin:0 0 4px">${escapeHtml(name || "Patient")}</h3>
+          <h3>${escapeHtml(name || "Patient")}</h3>
           <p class="muted" style="margin:0">MRN: ${escapeHtml(patient.external_id || "not set")} · DOB: ${escapeHtml(dateInput(patient.date_of_birth) || "not set")} · Diagnosis/program: ${escapeHtml(patient.diagnosis || "not set")}</p>
-          ${counts.length ? `<p class="muted" style="margin:6px 0 0">${counts.map(([k,v]) => `${k}: ${v}`).join(" · ")}</p>` : ""}
+          ${counts.length ? `<div class="ta-count-row">${counts.map(([k, v]) => `<span class="ta-count-pill">${escapeHtml(k)}: ${escapeHtml(String(v))}</span>`).join("")}</div>` : ""}
         </div>
-        <button class="btn small" type="button" data-global-open-patient="${patient.id}">Open patient</button>
+        <button class="btn small" type="button" data-global-open-patient="${patient.id}">Open Patient</button>
       </div>
-      ${error ? `<div class="error" style="margin-top:10px">${escapeHtml(error)}</div>` : tableHtml(["Type", "Status", "Date", "Details", "Created By", "Action"], rows)}
+      ${error ? `<div class="error" style="margin-top:10px">${escapeHtml(error)}</div>` : tableHtml(["Type", "Status", "Date", "Details", "Created By", "Action"], rows.map(r => [
+        escapeHtml(r.label),
+        statusBadge(r.status),
+        escapeHtml(dateInput(r.date) || fmtDate(r.date)),
+        escapeHtml(r.title),
+        escapeHtml(r.created_by_name || ""),
+        `<button class="link-btn" type="button" data-global-open-resource="${r.resource}" data-id="${r.id}">Open</button>`
+      ]))}
     </section>`;
   }).join("");
 
   $$(`[data-global-open-patient]`, results).forEach(b => {
     b.onclick = () => {
+      closeProfessionalModal("globalPatientSearchModal");
       panel("patients");
       setTimeout(() => openPatientDetail(b.dataset.globalOpenPatient), 150);
     };
   });
   $$(`[data-global-open-resource]`, results).forEach(b => {
-    b.onclick = () => {
-      const resource = b.dataset.globalOpenResource;
-      panel(resource);
-      setTimeout(() => openResourceDetail(resource, b.dataset.id), 150);
-    };
+    b.onclick = () => openResourceDetailModal(b.dataset.globalOpenResource, b.dataset.id);
   });
 }
 
@@ -1387,7 +1727,7 @@ async function loadInbox() {
     const out = await api("/api/inbox");
     assigned.innerHTML = inboxTable(out.assigned || [], true);
     returned.innerHTML = inboxTable(out.returned || [], false);
-    $$(`[data-open-inbox]`).forEach(b => b.onclick = () => { panel(b.dataset.resource); openResourceDetail(b.dataset.resource, b.dataset.id); });
+    $$(`[data-open-inbox]`).forEach(b => b.onclick = () => openResourceDetailModal(b.dataset.resource, b.dataset.id));
     $("#metricInbox") && ($("#metricInbox").textContent = String((out.assigned || []).length + (out.returned || []).length));
   } catch (e) { assigned.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
 }
