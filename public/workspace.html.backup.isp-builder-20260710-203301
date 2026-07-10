@@ -34,7 +34,6 @@
         <button data-panel="dashboard" class="active">Dashboard</button>
         <button data-panel="analytics">Data Analytics</button>
         <button data-panel="aiWorkbench">AI Workbench</button>
-        <button data-panel="isps">ISP Builder</button>
         <button data-panel="patients">Patients</button>
         <button data-panel="inbox">Inbox</button>
         <button data-panel="sessions">Session Log</button>
@@ -113,7 +112,6 @@
           </div>
           <div class="form-actions">
             <button class="btn" id="runAiWorkbench" type="button">Ask ABA-Skilled BCBA Agent</button>
-            <button class="btn secondary" id="generateIspFromWorkbench" type="button">Generate ISP Draft</button>
             <button class="btn secondary" id="clearAiWorkbench" type="button">Clear</button>
           </div>
           <div id="aiWorkbenchMsg" class="message"></div>
@@ -153,7 +151,6 @@
             <button data-patient-tab="sessions" class="active">Sessions</button>
             <button data-patient-tab="behaviors">Behaviors</button>
             <button data-patient-tab="plans">Plans</button>
-            <button data-patient-tab="isps">ISP</button>
             <button data-patient-tab="reports">Reports</button>
             <button data-patient-tab="incidents">Incidents</button>
           </div>
@@ -170,7 +167,6 @@
       <section class="panel resource-panel" id="sessions" data-resource="sessions"><div class="resourceMount"></div></section>
       <section class="panel resource-panel" id="behaviors" data-resource="behaviors"><div class="resourceMount"></div></section>
       <section class="panel resource-panel" id="plans" data-resource="plans"><div class="resourceMount"></div></section>
-      <section class="panel resource-panel" id="isps" data-resource="isps"><div class="resourceMount"></div></section>
       <section class="panel resource-panel" id="incidents" data-resource="incidents"><div class="resourceMount"></div></section>
       <section class="panel resource-panel" id="reports" data-resource="reports"><div class="resourceMount"></div></section>
 

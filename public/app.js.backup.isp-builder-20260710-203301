@@ -82,35 +82,6 @@ const resourceDefs = {
       { name: "restrictions", label: "Restrictions / contraindications", type: "textarea", wide: true }
     ]
   },
-
-  isps: {
-    title: "Individual Service Plans",
-    singular: "isp",
-    endpoint: "/api/isps",
-    listKey: "isps",
-    voiceField: "background",
-    columns: ["patient", "status", "title", "created_by_name", "created_at", "modified_by_name", "modified_at"],
-    fields: [
-      { name: "patient_id", label: "Patient", type: "patient", required: true },
-      { name: "title", label: "ISP title", required: true },
-      { name: "plan_purpose", label: "Reason for ISP / plan purpose", type: "textarea", wide: true },
-      { name: "background", label: "Background and current status", type: "textarea", wide: true },
-      { name: "strengths", label: "Strengths, preferences, motivators", type: "textarea", wide: true },
-      { name: "behavioral_summary", label: "Behavioral summary", type: "textarea", wide: true },
-      { name: "target_behaviors", label: "Target behaviors JSON", type: "textarea", wide: true },
-      { name: "abc_patterns", label: "ABC patterns JSON", type: "textarea", wide: true },
-      { name: "suspected_functions", label: "Suspected functions JSON", type: "textarea", wide: true },
-      { name: "replacement_skills", label: "Replacement skills JSON", type: "textarea", wide: true },
-      { name: "goals", label: "Measurable goals and objectives JSON", type: "textarea", wide: true },
-      { name: "interventions", label: "Interventions and teaching strategies JSON", type: "textarea", wide: true },
-      { name: "safety_plan", label: "Crisis / safety / incident response plan", type: "textarea", wide: true },
-      { name: "data_collection_plan", label: "Data collection plan", type: "textarea", wide: true },
-      { name: "caregiver_training_plan", label: "Caregiver / staff training plan", type: "textarea", wide: true },
-      { name: "generalization_plan", label: "Generalization and maintenance plan", type: "textarea", wide: true },
-      { name: "review_schedule", label: "Review schedule", type: "textarea", wide: true },
-      { name: "bcba_review_notes", label: "BCBA review notes / sign-off", type: "textarea", wide: true }
-    ]
-  },
   incidents: {
     title: "Incidents",
     singular: "incident",
@@ -988,32 +959,6 @@ async function runAiWorkbench() {
   }
 }
 
-
-async function generateIspFromWorkbench() {
-  const msg = $("#aiWorkbenchMsg");
-  const patient_id = $("#aiWorkbenchPatient")?.value || "";
-  const question = ($("#aiWorkbenchQuestion")?.value || "Prepare an Individual Service Plan draft based on this patient history and the current conversation.").trim();
-  if (!patient_id) return setMessage(msg, "Select a patient before generating an ISP draft.", "error");
-  try {
-    setMessage(msg, "Generating structured ISP draft from patient context...", "info");
-    const out = await api("/api/ai/workbench/isp", {
-      method: "POST",
-      body: JSON.stringify({
-        patient_id,
-        date_range_days: $("#aiWorkbenchRange")?.value || "90",
-        question
-      })
-    });
-    setMessage(msg, out.message || "ISP draft generated and saved.", "success");
-    if (out.isp?.id) {
-      panel("isps");
-      setTimeout(() => openResourceDetail("isps", out.isp.id), 350);
-    }
-  } catch (e) {
-    setMessage(msg, e.message, "error");
-  }
-}
-
 async function loadInbox() {
   const assigned = $("#assignedInbox"), returned = $("#returnedInbox");
   if (!assigned || !returned) return;
@@ -1137,7 +1082,6 @@ $("#refreshAll")?.addEventListener("click", async () => { await loadPatients(); 
 $("#refreshAnalytics")?.addEventListener("click", loadAnalytics);
 $("#refreshAiWorkbench")?.addEventListener("click", loadAiWorkbench);
 $("#runAiWorkbench")?.addEventListener("click", runAiWorkbench);
-$("#generateIspFromWorkbench")?.addEventListener("click", generateIspFromWorkbench);
 $("#clearAiWorkbench")?.addEventListener("click", () => { $("#aiWorkbenchQuestion") && ($("#aiWorkbenchQuestion").value = ""); $("#aiWorkbenchOutput") && ($("#aiWorkbenchOutput").hidden = true); setMessage($("#aiWorkbenchMsg"), ""); });
 $("#refreshInbox")?.addEventListener("click", loadInbox);
 $("#refreshAdmin")?.addEventListener("click", loadAdmin);
