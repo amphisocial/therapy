@@ -65,7 +65,7 @@ const pool = new Pool({
 });
 
 const app = express();
-app.set("trust proxy", true);
+app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
 app.use(helmet({ crossOriginEmbedderPolicy: false, contentSecurityPolicy: false }));
 app.use(cors({ origin: SITE_ORIGIN.split(",").map(s => s.trim()), credentials: true }));
 app.use(express.json({ limit: `${Math.ceil(S3_MAX_UPLOAD_MB * 1.5) + 2}mb` }));
