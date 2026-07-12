@@ -9,7 +9,6 @@ let activePatient = null;
 let patientSummary = null;
 let activeVoice = null;
 let analyticsCache = null;
-let aiWorkbenchBootstrap = null;
 let globalSearchTimer = null;
 let globalSearchModalQuery = "";
 let bcbaChatState = null;
@@ -330,23 +329,40 @@ function patientName(row) { return row.first_name && row.last_name ? `${row.firs
 function fullPatientName(p) { return `${p.first_name || ""} ${p.last_name || ""}`.trim(); }
 function isAdmin() { return currentUser?.role === "org_admin"; }
 
+const PASSWORD_MIN_LENGTH = 12;
+const PASSWORD_RULES = [
+  { key: "length", label: `At least ${PASSWORD_MIN_LENGTH} characters`, test: p => String(p).length >= PASSWORD_MIN_LENGTH },
+  { key: "upper", label: "One uppercase letter", test: p => /[A-Z]/.test(p) },
+  { key: "lower", label: "One lowercase letter", test: p => /[a-z]/.test(p) },
+  { key: "number", label: "One number", test: p => /[0-9]/.test(p) },
+  { key: "special", label: "One special character", test: p => /[^A-Za-z0-9]/.test(p) }
+];
 function passwordRuleErrors(password = "") {
-  const errors = [];
-  if (String(password).length < 10) errors.push("at least 10 characters");
-  if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
-  if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
-  if (!/[0-9]/.test(password)) errors.push("one number");
-  if (!/[^A-Za-z0-9]/.test(password)) errors.push("one special character");
-  return errors;
+  return PASSWORD_RULES.filter(r => !r.test(password)).map(r => r.label.replace(/^One /, "one ").replace(/^At least/, "at least"));
 }
 function passwordRulesMessage() {
-  return "Password must be at least 10 characters and include uppercase, lowercase, number, and special character.";
+  return `Password must be at least ${PASSWORD_MIN_LENGTH} characters and include uppercase, lowercase, number, and special character.`;
 }
 function validatePasswordFields(password, confirmPassword) {
   const errors = passwordRuleErrors(password);
   if (errors.length) return passwordRulesMessage();
   if (password !== confirmPassword) return "Passwords do not match.";
   return "";
+}
+// Renders a live pass/fail checklist under a password field as the user types,
+// so weak passwords are caught before submit instead of only on server error.
+function renderPasswordChecklist(password, listEl) {
+  if (!listEl) return;
+  listEl.innerHTML = PASSWORD_RULES.map(r => {
+    const ok = r.test(password || "");
+    return `<li class="${ok ? "ok" : "fail"}"><span class="pw-check-icon">${ok ? "✓" : "•"}</span>${escapeHtml(r.label)}</li>`;
+  }).join("");
+}
+function attachLivePasswordChecklist(inputEl, listEl) {
+  if (!inputEl || !listEl || inputEl.dataset.pwChecklistBound) return;
+  inputEl.dataset.pwChecklistBound = "1";
+  renderPasswordChecklist(inputEl.value, listEl);
+  inputEl.addEventListener("input", () => renderPasswordChecklist(inputEl.value, listEl));
 }
 
 async function api(path, opts = {}) {
@@ -524,15 +540,22 @@ function openProfessionalModal({ id = "taProfessionalModal", title = "", subtitl
 
 function showMfaSetupModal() {
   const setupKey = currentUser?.mfaSetup?.secret || "";
+  const qrDataUrl = currentUser?.mfaSetup?.qrDataUrl || "";
   const body = `
     <div class="notice">
       <strong>MFA is optional but recommended.</strong>
-      <p>Open Google Authenticator, Microsoft Authenticator, or Authy. Choose <b>Add account</b>, then <b>Enter setup key manually</b>.</p>
+      <p>Open Google Authenticator, Microsoft Authenticator, or Authy. Choose <b>Add account</b>, then <b>Scan a QR code</b>.</p>
     </div>
     <div class="form-card" style="margin-top:16px">
-      <label>Setup key
-        <input readonly value="${escapeHtml(setupKey || "Setup key is not available. Ask your admin to reset MFA.")}">
-      </label>
+      ${qrDataUrl
+        ? `<div class="mfa-qr-wrap"><img class="mfa-qr-img" src="${qrDataUrl}" alt="Scan this QR code with your authenticator app" width="200" height="200"></div>`
+        : `<div class="notice">QR code is not available right now. Use the setup key below instead, or ask your admin to reset MFA.</div>`}
+      <details class="mfa-manual-key">
+        <summary>Can't scan? Enter the setup key manually</summary>
+        <label>Setup key
+          <input readonly value="${escapeHtml(setupKey || "Setup key is not available. Ask your admin to reset MFA.")}">
+        </label>
+      </details>
       <label>6-digit MFA code
         <input id="mfaModalTotp" inputmode="numeric" placeholder="123456">
       </label>
@@ -991,12 +1014,12 @@ function showPasswordChangeRequiredModal() {
           <input name="currentPassword" type="password" required autocomplete="current-password">
         </label>
         <label>New password
-          <input name="newPassword" type="password" required minlength="10" autocomplete="new-password">
+          <input id="firstLoginNewPassword" name="newPassword" type="password" required minlength="12" autocomplete="new-password">
         </label>
+        <ul id="firstLoginPasswordChecklist" class="password-checklist"></ul>
         <label>Confirm new password
-          <input name="confirmPassword" type="password" required minlength="10" autocomplete="new-password">
+          <input name="confirmPassword" type="password" required minlength="12" autocomplete="new-password">
         </label>
-        <small>${passwordRulesMessage()}</small>
         <div class="form-actions">
           <button class="btn">Change password</button>
           <button class="btn secondary" type="button" id="firstLoginLogout">Logoff</button>
@@ -1006,6 +1029,7 @@ function showPasswordChangeRequiredModal() {
     </div>
   `;
   document.body.appendChild(wrap);
+  attachLivePasswordChecklist(wrap.querySelector("#firstLoginNewPassword"), wrap.querySelector("#firstLoginPasswordChecklist"));
   wrap.querySelector("#firstLoginLogout").onclick = logout;
   wrap.querySelector("#firstLoginPasswordForm").onsubmit = async e => {
     e.preventDefault();
@@ -1047,7 +1071,6 @@ function panel(id) {
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === id));
   if (id === "patients") loadPatients();
   if (id === "analytics") loadAnalytics();
-  if (id === "aiWorkbench") loadAiWorkbench();
   if (id === "bcbaChat") loadBcbaChat();
   if (id === "inbox") loadInbox();
   if (resourceDefs[id]) loadResourceList(id);
@@ -1635,12 +1658,15 @@ function renderAnalytics(out) {
       <section class="analytics-card span-2"><h3>Compliance and data quality</h3>${miniBarTable(["Check", "Count", "Recommended action"], qualityRows)}</section>
     </div>`;
   $$(`[data-ai-patient-risk]`, mount).forEach(b => b.onclick = () => {
-    panel("aiWorkbench");
+    panel("bcbaChat");
     setTimeout(() => {
-      const sel = $("#aiWorkbenchPatient");
+      const sel = $("#bcbaChatPatient");
       if (sel) sel.value = b.dataset.aiPatientRisk;
-      const q = $("#aiWorkbenchQuestion");
-      if (q) q.value = "Prepare a BCBA plan review briefing for this patient. Highlight behavior trends, incident risk, possible antecedent/function patterns, intervention response, and data gaps.";
+      const state = loadBcbaChatState();
+      state.patient_id = b.dataset.aiPatientRisk || state.patient_id || "";
+      saveBcbaChatState();
+      const input = $("#bcbaChatInput");
+      if (input) { input.value = "Prepare a BCBA plan review briefing for this patient. Highlight behavior trends, incident risk, possible antecedent/function patterns, intervention response, and data gaps."; input.focus(); }
     }, 300);
   });
 }
@@ -1655,96 +1681,6 @@ async function loadAnalytics() {
     mount.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
   }
 }
-function renderAiWorkbenchBootstrap(out) {
-  const sel = $("#aiWorkbenchPatient");
-  if (sel) {
-    const current = sel.value;
-    sel.innerHTML = `<option value="">Organization-level / no single patient</option>` + (out.patients || []).map(p => `<option value="${p.id}">${escapeHtml(p.full_name)}${p.diagnosis ? ` — ${escapeHtml(p.diagnosis)}` : ""}</option>`).join("");
-    sel.value = current || "";
-  }
-  const skillEl = $("#aiWorkbenchSkillStatus");
-  if (skillEl) {
-    const skill = out.agent_skill || {};
-    const source = skill.source === "file" ? "file loaded" : "built-in fallback";
-    skillEl.textContent = `Agent skill: ${skill.path || "config/aba-bcba-agent.skill.md"} (${source})`;
-  }
-  const hist = $("#aiWorkbenchHistory");
-  if (hist) {
-    const rows = (out.history || []).map(h => [
-      fmtDate(h.created_at), escapeHtml(h.patient_name || "Org-level"), escapeHtml(h.mode || ""), escapeHtml(String(h.date_range_days || "")), escapeHtml(h.question || "")
-    ]);
-    hist.innerHTML = tableHtml(["Date", "Context", "Mode", "Days", "Question"], rows);
-  }
-}
-async function loadAiWorkbench() {
-  try {
-    aiWorkbenchBootstrap = await api("/api/ai/workbench/bootstrap");
-    renderAiWorkbenchBootstrap(aiWorkbenchBootstrap);
-  } catch (e) {
-    setMessage($("#aiWorkbenchMsg"), e.message, "error");
-  }
-}
-function renderWorkbenchResponse(out) {
-  const el = $("#aiWorkbenchOutput");
-  if (!el) return;
-  el.hidden = false;
-  const evidence = (out.evidence || []).map(x => `<li>${escapeHtml(x)}</li>`).join("");
-  el.innerHTML = `
-    <div class="ai-answer-head"><p class="eyebrow">${escapeHtml(out.agent || "ABA-Skilled BCBA Agent")}</p><h3>Workbench response</h3><span class="risk-badge ${out.mode === "llm" ? "medium" : "low"}">${escapeHtml(out.mode === "llm" ? "LLM assisted" : "Local no-PHI mode")}</span></div>
-    <div class="ai-answer-body">${escapeHtml(out.answer || "").replace(/\n/g, "<br>")}</div>
-    ${evidence ? `<div class="ai-evidence"><h4>Evidence used</h4><ul>${evidence}</ul></div>` : ""}
-    <p class="muted">Outputs require clinician review. TherapyAgent does not diagnose, prescribe treatment, or replace BCBA judgment.</p>`;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-async function runAiWorkbench() {
-  const msg = $("#aiWorkbenchMsg");
-  const question = ($("#aiWorkbenchQuestion")?.value || "").trim();
-  if (!question) return setMessage(msg, "Enter a question for the ABA-Skilled BCBA Agent.", "error");
-  try {
-    setMessage(msg, "Building patient context and generating response...", "info");
-    const out = await api("/api/ai/workbench", {
-      method: "POST",
-      body: JSON.stringify({
-        patient_id: $("#aiWorkbenchPatient")?.value || "",
-        date_range_days: $("#aiWorkbenchRange")?.value || "90",
-        mode: $("#aiWorkbenchMode")?.value || "general",
-        question
-      })
-    });
-    setMessage(msg, out.message || "Response generated.", "success");
-    renderWorkbenchResponse(out);
-    await loadAiWorkbench();
-  } catch (e) {
-    setMessage(msg, e.message, "error");
-  }
-}
-
-
-async function generateIspFromWorkbench() {
-  const msg = $("#aiWorkbenchMsg");
-  const patient_id = $("#aiWorkbenchPatient")?.value || "";
-  const question = ($("#aiWorkbenchQuestion")?.value || "Prepare an Individual Service Plan draft based on this patient history and the current conversation.").trim();
-  if (!patient_id) return setMessage(msg, "Select a patient before generating an ISP draft.", "error");
-  try {
-    setMessage(msg, "Generating structured ISP draft from patient context...", "info");
-    const out = await api("/api/ai/workbench/isp", {
-      method: "POST",
-      body: JSON.stringify({
-        patient_id,
-        date_range_days: $("#aiWorkbenchRange")?.value || "90",
-        question
-      })
-    });
-    setMessage(msg, out.message || "ISP draft generated and saved.", "success");
-    if (out.isp?.id) {
-      panel("isps");
-      setTimeout(() => openResourceDetail("isps", out.isp.id), 350);
-    }
-  } catch (e) {
-    setMessage(msg, e.message, "error");
-  }
-}
-
 
 function bcbaChatStorageKey() {
   return `therapyagent_bcba_chat_${currentUser?.id || "anonymous"}`;
@@ -2021,14 +1957,15 @@ async function resetAdminPassword(id) {
       <h2>Reset Password</h2>
       <p class="notice">Enter a temporary password. The user will receive it by email if SMTP is configured and must change it at next login.</p>
       <form id="resetPasswordForm" class="auth-form">
-        <label>Temporary password<input name="initialPassword" type="password" required minlength="10" autocomplete="new-password"></label>
-        <label>Confirm temporary password<input name="confirmPassword" type="password" required minlength="10" autocomplete="new-password"></label>
-        <small>${passwordRulesMessage()}</small>
+        <label>Temporary password<input id="resetInitialPassword" name="initialPassword" type="password" required minlength="12" autocomplete="new-password"></label>
+        <ul id="resetPasswordChecklist" class="password-checklist"></ul>
+        <label>Confirm temporary password<input name="confirmPassword" type="password" required minlength="12" autocomplete="new-password"></label>
         <div class="form-actions"><button class="btn">Reset password</button><button class="btn secondary" type="button" data-cancel-reset>Cancel</button></div>
         <div class="message" id="resetPasswordMsg"></div>
       </form>
     </div>`;
   document.body.appendChild(wrap);
+  attachLivePasswordChecklist(wrap.querySelector("#resetInitialPassword"), wrap.querySelector("#resetPasswordChecklist"));
   const close = () => wrap.remove();
   wrap.querySelector(".x").onclick = close;
   wrap.querySelector("[data-cancel-reset]").onclick = close;
@@ -2127,27 +2064,6 @@ function ensureWorkspaceUiPatch() {
     const before = $('[data-patient-tab="reports"]', tabs) || $('[data-patient-tab="incidents"]', tabs);
     tabs.insertBefore(btn, before || null);
   }
-
-  const actionRow = $("#runAiWorkbench")?.closest(".form-actions");
-  if (actionRow && !$("#generateIspFromWorkbench")) {
-    const btn = document.createElement("button");
-    btn.className = "btn secondary";
-    btn.id = "generateIspFromWorkbench";
-    btn.type = "button";
-    btn.textContent = "Generate ISP Draft";
-    actionRow.insertBefore(btn, $("#clearAiWorkbench") || null);
-  }
-
-  if (!$("#aiWorkbenchSkillStatus")) {
-    const card = $(".ai-workbench-card") || $("#aiWorkbench .notice");
-    if (card) {
-      const el = document.createElement("p");
-      el.id = "aiWorkbenchSkillStatus";
-      el.className = "muted";
-      el.textContent = "Agent skill: loading...";
-      card.appendChild(el);
-    }
-  }
 }
 
 
@@ -2164,10 +2080,6 @@ $("#goLoginAfterMfa")?.addEventListener("click", () => setAuthScreen("login"));
 $("#logoutBtn")?.addEventListener("click", logout);
 $("#refreshAll")?.addEventListener("click", async () => { await loadPatients(); await refreshDashboard(); });
 $("#refreshAnalytics")?.addEventListener("click", loadAnalytics);
-$("#refreshAiWorkbench")?.addEventListener("click", loadAiWorkbench);
-$("#runAiWorkbench")?.addEventListener("click", runAiWorkbench);
-$("#generateIspFromWorkbench")?.addEventListener("click", generateIspFromWorkbench);
-$("#clearAiWorkbench")?.addEventListener("click", () => { $("#aiWorkbenchQuestion") && ($("#aiWorkbenchQuestion").value = ""); $("#aiWorkbenchOutput") && ($("#aiWorkbenchOutput").hidden = true); setMessage($("#aiWorkbenchMsg"), ""); });
 $("#refreshInbox")?.addEventListener("click", loadInbox);
 $("#refreshAdmin")?.addEventListener("click", loadAdmin);
 $("#saveRoleMatrix")?.addEventListener("click", saveRoleMatrix);
@@ -2207,6 +2119,9 @@ $("#orgSearch")?.addEventListener("change", e => {
   $("#organizationId").value = exact ? exact.id : "";
 });
 
+attachLivePasswordChecklist($("#registerPassword"), $("#registerPasswordChecklist"));
+attachLivePasswordChecklist($("#adminInitialPassword"), $("#adminInitialPasswordChecklist"));
+
 $("#registerForm")?.addEventListener("submit", async e => {
   e.preventDefault();
   const body = formBody(e.target);
@@ -2219,8 +2134,15 @@ $("#registerForm")?.addEventListener("submit", async e => {
     setAuthMessage("Creating account and MFA setup key...", "info");
     const out = await api("/api/register", { method: "POST", body: JSON.stringify(body) });
     token = out.token; localStorage.setItem("ta_token", token);
-    $("#mfaSetupPanel").hidden = false; $("#mfaSecret").textContent = out.mfaSetup?.secret || "";
-    setAuthMessage(out.message || "Account created. Manually add the MFA setup key in Authenticator, then verify the 6-digit code.", out.status === "pending_approval" ? "warning" : "success");
+    $("#mfaSetupPanel").hidden = false;
+    $("#mfaSecret").textContent = out.mfaSetup?.secret || "";
+    const qrWrap = $("#mfaQrWrap");
+    if (qrWrap) {
+      qrWrap.innerHTML = out.mfaSetup?.qrDataUrl
+        ? `<img class="mfa-qr-img" src="${out.mfaSetup.qrDataUrl}" alt="Scan this QR code with your authenticator app" width="200" height="200">`
+        : `<div class="notice">QR code is not available right now. Use the setup key below.</div>`;
+    }
+    setAuthMessage(out.message || "Account created. Scan the QR code in Authenticator, then verify the 6-digit code.", out.status === "pending_approval" ? "warning" : "success");
   } catch (err) { setAuthMessage(err.message, "error"); }
 });
 $("#mfaForm")?.addEventListener("submit", async e => {

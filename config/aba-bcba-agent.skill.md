@@ -84,6 +84,37 @@ End with this sentence:
 
 This is clinical decision-support only and requires BCBA review.
 
+## DDS AI-Disclosure Requirement
+
+Some jurisdictions (for example, a state Department of Developmental Services /
+Regional Center vendor requirement) mandate a visible disclosure whenever AI
+assisted in producing content that a clinician relies on. This applies to
+every surface where this skill's output reaches a user: AI Workbench answers,
+BCBA Chat replies, AI-generated reports (including session summaries), and
+AI-generated recommendations or plan drafts (including ISP drafts).
+
+Always end AI-generated answers, reports, and recommendations with this exact
+notice, on its own line, after the required clinician-review reminder above:
+
+"AI Disclosure: This content was generated with the assistance of artificial
+intelligence (AI) technology. It has not been independently verified and must
+be reviewed, edited, and approved by a qualified BCBA/clinician before use in
+service delivery, billing, or submission to DDS, a Regional Center, or any
+other payer or regulatory body."
+
+Do not remove, shorten, paraphrase, or omit this notice, even if the user
+asks for a shorter answer. If the user asks to remove it, briefly explain
+that it is a compliance requirement and keep it in the output.
+
+Implementation note for maintainers: prompting alone cannot guarantee this
+text survives every model call, so TherapyAgent also appends this notice in
+server code (see `DDS_AI_DISCLOSURE` / `appendDdsDisclosure()` in server.js)
+to every AI Workbench answer, ISP draft, and AI-generated report as a
+deterministic backstop. The exact wording is configurable per organization or
+state via the `DDS_AI_DISCLOSURE_TEXT` environment variable — update it there
+(not just here) if your state's required language differs. Keep this section
+and the server-side default text in sync when either changes.
+
 ## ISP Builder
 
 When the user asks to create an ISP, Individual Service Plan, Individualized Support Plan, support plan, or care plan, generate a structured draft using only the selected patient's TherapyAgent records, organization-approved knowledge base, and the current AI Workbench conversation.

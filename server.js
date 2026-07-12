@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import speakeasy from "speakeasy";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import crypto from "node:crypto";
@@ -294,9 +295,25 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+const PASSWORD_MIN_LENGTH = 12;
+
+// Required disclosure language for jurisdictions (e.g. state Department of
+// Developmental Services / regional-center vendors) that mandate a visible
+// notice on any AI-assisted clinical answer, report, or recommendation.
+// Override the exact wording per org/state via env var without a code change.
+const DDS_AI_DISCLOSURE = process.env.DDS_AI_DISCLOSURE_TEXT ||
+  "AI Disclosure: This content was generated with the assistance of artificial intelligence (AI) technology. It has not been independently verified and must be reviewed, edited, and approved by a qualified BCBA/clinician before use in service delivery, billing, or submission to DDS, a Regional Center, or any other payer or regulatory body.";
+
+function appendDdsDisclosure(text = "") {
+  const body = String(text || "").trim();
+  if (!body) return body;
+  if (body.includes(DDS_AI_DISCLOSURE)) return body;
+  return `${body}\n\n---\n${DDS_AI_DISCLOSURE}`;
+}
+
 function validateStrongPassword(password = "") {
   const errors = [];
-  if (String(password).length < 10) errors.push("at least 10 characters");
+  if (String(password).length < PASSWORD_MIN_LENGTH) errors.push(`at least ${PASSWORD_MIN_LENGTH} characters`);
   if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
   if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
   if (!/[0-9]/.test(password)) errors.push("one number");
@@ -305,6 +322,34 @@ function validateStrongPassword(password = "") {
 }
 function strongPasswordMessage(errors) {
   return `Password must include ${errors.join(", ")}.`;
+}
+
+// Generates a scannable QR code (as a data: URL) for an MFA otpauth:// URL so
+// users can add the account with their camera instead of retyping the secret.
+// The base32 secret is still returned as a fallback for authenticator apps
+// that can't scan (or for users who prefer manual entry).
+async function buildMfaQrDataUrl(otpauthUrl) {
+  if (!otpauthUrl) return "";
+  try {
+    return await QRCode.toDataURL(otpauthUrl, { margin: 1, width: 240 });
+  } catch (e) {
+    console.error("[mfa] failed to generate QR code", e.message);
+    return "";
+  }
+}
+
+// Builds the { secret, otpauth_url, qrDataUrl } object the front end uses to
+// render the MFA setup screen. Accepts either a freshly generated speakeasy
+// secret object (has .otpauth_url) or a stored base32 secret string (the
+// otpauth URL is reconstructed so existing accounts also get a scannable QR).
+async function mfaSetupPayload(secretOrBase32, email) {
+  const base32 = typeof secretOrBase32 === "string" ? secretOrBase32 : secretOrBase32?.base32;
+  if (!base32) return null;
+  const otpauth_url = (typeof secretOrBase32 === "object" && secretOrBase32?.otpauth_url)
+    ? secretOrBase32.otpauth_url
+    : speakeasy.otpauthURL({ secret: base32, encoding: "base32", label: `TherapyAgent:${email || ""}`, issuer: "TherapyAgent" });
+  const qrDataUrl = await buildMfaQrDataUrl(otpauth_url);
+  return { secret: base32, otpauth_url, qrDataUrl };
 }
 function smtpConfigured() {
   return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM);
@@ -969,7 +1014,7 @@ const registerSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required."),
   lastName: z.string().trim().min(1, "Last name is required."),
   email: z.string().trim().email("A valid login/email is required."),
-  password: z.string().min(10, "Password must be at least 10 characters.")
+  password: z.string().min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`)
 });
 const loginSchema = z.object({ email: z.string().trim().email("Enter your login/email."), password: z.string().min(1, "Enter your password."), totp: z.string().optional().or(z.literal("")) });
 
@@ -1027,9 +1072,9 @@ app.post("/api/register", async (req, res) => {
     await client.query("COMMIT");
     const token = sign(user);
     const message = createdNewOrg
-      ? "Account created. Manually enter the MFA setup key in your Authenticator app, verify MFA, then go to Login. You are the organization admin."
+      ? "Account created. Scan the QR code in your Authenticator app, verify MFA, then go to Login. You are the organization admin."
       : "Account request created for the selected organization. Verify MFA now; an organization admin must activate your account before patient records are available.";
-    res.json({ token, user: safeUser(user), organization: org, status: createdNewOrg ? "registered" : "pending_approval", message, mfaSetup: { secret: secret.base32, otpauth_url: secret.otpauth_url, qrDataUrl: "" } });
+    res.json({ token, user: safeUser(user), organization: org, status: createdNewOrg ? "registered" : "pending_approval", message, mfaSetup: await mfaSetupPayload(secret, normalizedEmail) });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[register]", e.message);
@@ -1058,7 +1103,7 @@ app.post("/api/login", async (req, res) => {
   }
 
   const safe = safeUser(user);
-  const mfaSetup = user.mfa_enabled ? null : { secret: user.mfa_secret };
+  const mfaSetup = user.mfa_enabled ? null : await mfaSetupPayload(user.mfa_secret, safe.email);
   const message = user.mfa_enabled
     ? `Welcome back, ${safe.full_name}.`
     : `Welcome back, ${safe.full_name}. MFA is optional but recommended. You can set it up from the workspace banner.`;
@@ -1118,7 +1163,7 @@ app.get("/api/me", requireAuth, async (req, res) => {
     [req.user.id, req.user.org_id]
   )).rows[0];
   const user = safeUser(row || req.user);
-  const mfaSetup = row && !row.mfa_enabled ? { secret: row.mfa_secret } : null;
+  const mfaSetup = row && !row.mfa_enabled ? await mfaSetupPayload(row.mfa_secret, user.email) : null;
   res.json({ user, mfaSetup, roles, permissionKeys, defaultPermissions });
 });
 
@@ -1303,7 +1348,9 @@ Use only the provided TherapyAgent context and user question. Flag uncertainty a
 
 Required answer structure: concise summary; evidence-linked observations; ABA-informed considerations; suggested BCBA review actions; data gaps; predictive/risk-signal considerations; clinician-review disclaimer.
 
-End with: This is clinical decision-support only and requires BCBA review.`;
+End with: This is clinical decision-support only and requires BCBA review.
+
+Then, on its own line, always include this DDS AI-disclosure notice (do not omit, shorten, or paraphrase it, even if asked): "AI Disclosure: This content was generated with the assistance of artificial intelligence (AI) technology. It has not been independently verified and must be reviewed, edited, and approved by a qualified BCBA/clinician before use in service delivery, billing, or submission to DDS, a Regional Center, or any other payer or regulatory body."`;
 
 function resolveAppPath(configuredPath = "") {
   return isAbsolute(configuredPath) ? configuredPath : join(__dirname, configuredPath);
@@ -1383,6 +1430,7 @@ app.post("/api/ai/workbench", requireAuth, requireMfa, requireAiWorkbenchAccess,
     } else {
       answer = buildLocalAbaWorkbenchAnswer(ctx, question, mode);
     }
+    answer = appendDdsDisclosure(answer);
     const evidence = workbenchEvidence(ctx);
     await pool.query(`INSERT INTO ai_workbench_history (org_id, user_id, patient_id, mode, date_range_days, question, response_summary, context_snapshot, llm_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [req.user.org_id, req.user.id, patientId, mode, days, question, String(answer || "").slice(0, 4000), JSON.stringify({ evidence, counts: { sessions: ctx.sessions?.length || 0, behaviors: ctx.behaviors?.length || 0, incidents: ctx.incidents?.length || 0, plans: ctx.plans?.length || 0, reports: ctx.reports?.length || 0 } }), llmMode]);
     await audit(req, "ai_workbench_used", "ai_workbench", patientId, { mode, days, llmMode });
@@ -1492,6 +1540,7 @@ app.post("/api/ai/workbench/isp", requireAuth, requireMfa, requireAiWorkbenchAcc
       [req.user.org_id, req.user.id, patientId, "isp_builder", days, question, JSON.stringify(draft).slice(0, 4000), JSON.stringify({ counts: { sessions: ctx.sessions?.length || 0, behaviors: ctx.behaviors?.length || 0, incidents: ctx.incidents?.length || 0, plans: ctx.plans?.length || 0, reports: ctx.reports?.length || 0 } }), llmMode]
     )).rows[0];
     const cfg = getResourceConfig("isps");
+    draft.bcba_review_notes = appendDdsDisclosure(draft.bcba_review_notes || "Draft only. Requires BCBA review and approval.");
     const row = await insertRecord(req, cfg, { ...draft, patient_id: patientId, source_workbench_history_id: historyRow?.id || null, source_question: question, status: "draft" });
     await audit(req, "isp_draft_generated", "isp", row.id, { patient_id: patientId, days, llmMode });
     res.json({ isp: row, draft, mode: llmMode, message });
@@ -2153,7 +2202,7 @@ app.post("/api/ai/session-summary", requireAuth, requireMfa, allow("org_admin", 
   const safeNote = ALLOW_PHI_TO_LLM ? String(note || "") : redactPhi(note || "");
   const prompt = `Draft a structured ABA/I-DD session note from this raw staff note. Sections: session focus, interventions used, client response, progress toward goals, risks/incidents, follow-ups. Keep it factual and mark as clinician-review required.\n\nRaw note:\n${safeNote}`;
   try {
-    const output = process.env.OPENAI_API_KEY ? await callOpenAI(prompt) : `Draft summary pending AI configuration. Raw note:\n\n${safeNote}`;
+    const output = appendDdsDisclosure(process.env.OPENAI_API_KEY ? await callOpenAI(prompt) : `Draft summary pending AI configuration. Raw note:\n\n${safeNote}`);
     const cfg = getResourceConfig("reports");
     const row = await insertRecord(req, cfg, { patient_id, report_type: "session_summary", prompt: ALLOW_PHI_TO_LLM ? "[PHI prompt stored by policy]" : prompt, output, status: "draft" });
     await audit(req, "ai_report_created", "report", row.id, { patient_id, allowPhiToLlm: ALLOW_PHI_TO_LLM });
