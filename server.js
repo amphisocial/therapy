@@ -175,6 +175,7 @@ const resourceConfigs = {
     insertColumns: ["patient_id", "report_type", "prompt", "output", "status"],
     updateColumns: ["patient_id", "report_type", "prompt", "output", "status"],
     required: ["patient_id", "output"],
+    similarityField: "output",
     select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
   },
 
@@ -480,6 +481,61 @@ function cleanValue(column, value, cfg) {
   }
   if (["injury", "restraint"].includes(column)) return toBoolean(value);
   return value ?? null;
+}
+
+// --- Similarity guardrails (copy-paste / templated-note detector) ---------
+// Cheap, dependency-free heuristic: Jaccard similarity over 8-word shingles.
+// This catches near-verbatim reused notes (a common documentation-fraud /
+// audit-risk pattern) without needing an embeddings model or external call.
+const SIMILARITY_FLAG_THRESHOLD = 0.30;
+const SIMILARITY_SHINGLE_SIZE = 8;
+const SIMILARITY_MIN_WORDS = 25; // skip very short notes; too noisy to score meaningfully
+
+function textShingles(text = "") {
+  const words = String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length < SIMILARITY_MIN_WORDS) return null;
+  const shingles = new Set();
+  for (let i = 0; i <= words.length - SIMILARITY_SHINGLE_SIZE; i++) {
+    shingles.add(words.slice(i, i + SIMILARITY_SHINGLE_SIZE).join(" "));
+  }
+  return shingles;
+}
+
+function jaccardSimilarity(setA, setB) {
+  if (!setA || !setB || !setA.size || !setB.size) return 0;
+  let intersection = 0;
+  const [smaller, larger] = setA.size <= setB.size ? [setA, setB] : [setB, setA];
+  for (const shingle of smaller) if (larger.has(shingle)) intersection++;
+  const union = setA.size + setB.size - intersection;
+  return union ? intersection / union : 0;
+}
+
+// Compares a report's text against this clinician's other reports in the
+// same org (excluding the record being updated, if any) and returns the
+// highest similarity match. Scoped to the same author by design: the point
+// is to catch one clinician recycling their own notes, not to flag two
+// different clinicians independently describing a similar session.
+async function computeReportSimilarity(req, text, excludeId = null) {
+  const shinglesNew = textShingles(text);
+  if (!shinglesNew) return { score: 0, flagged: false, matchedId: null };
+  const priorRows = (await pool.query(
+    `SELECT id, output FROM ai_reports
+     WHERE org_id=$1 AND created_by=$2 ${excludeId ? "AND id<>$3" : ""}
+     ORDER BY created_at DESC LIMIT 50`,
+    excludeId ? [req.user.org_id, req.user.id, excludeId] : [req.user.org_id, req.user.id]
+  )).rows;
+  let best = { score: 0, flagged: false, matchedId: null };
+  for (const row of priorRows) {
+    const shinglesPrior = textShingles(row.output);
+    if (!shinglesPrior) continue;
+    const score = jaccardSimilarity(shinglesNew, shinglesPrior);
+    if (score > best.score) best = { score, flagged: score >= SIMILARITY_FLAG_THRESHOLD, matchedId: row.id };
+  }
+  return best;
 }
 
 
@@ -856,12 +912,20 @@ async function insertRecord(req, cfg, body) {
   if (body.patient_id && !(await assertPatient(req, body.patient_id))) {
     throw Object.assign(new Error("Patient not found."), { status: 404 });
   }
+  let similarity = null;
+  if (cfg.similarityField && body[cfg.similarityField]) {
+    similarity = await computeReportSimilarity(req, body[cfg.similarityField]);
+  }
   const cols = ["org_id", cfg.createdByField, ...cfg.insertColumns];
   const values = [req.user.org_id, req.user.id, ...cfg.insertColumns.map(c => cleanValue(c, body[c], cfg))];
+  if (similarity) {
+    cols.push("similarity_score", "similarity_flagged", "similarity_matched_report_id");
+    values.push(similarity.score || null, !!similarity.flagged, similarity.matchedId || null);
+  }
   const placeholders = values.map((_, i) => `$${i + 1}`);
   const sql = `INSERT INTO ${cfg.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`;
   const row = (await pool.query(sql, values)).rows[0];
-  await audit(req, `${cfg.singular}_created`, cfg.singular, row.id, { patient_id: body.patient_id || null });
+  await audit(req, `${cfg.singular}_created`, cfg.singular, row.id, { patient_id: body.patient_id || null, similarity_flagged: similarity?.flagged || false });
   return row;
 }
 
@@ -880,6 +944,15 @@ async function updateRecord(req, cfg, id, body, options = {}) {
       values.push(cleanValue(col, body[col], cfg));
       sets.push(`${col}=$${values.length}`);
     }
+  }
+  if (cfg.similarityField && Object.prototype.hasOwnProperty.call(body, cfg.similarityField) && body[cfg.similarityField]) {
+    const similarity = await computeReportSimilarity(req, body[cfg.similarityField], id);
+    values.push(similarity.score || null);
+    sets.push(`similarity_score=$${values.length}`);
+    values.push(!!similarity.flagged);
+    sets.push(`similarity_flagged=$${values.length}`);
+    values.push(similarity.matchedId || null);
+    sets.push(`similarity_matched_report_id=$${values.length}`);
   }
   values.push(req.user.id);
   sets.push(`modified_by=$${values.length}`);

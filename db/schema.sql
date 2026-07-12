@@ -405,3 +405,16 @@ CREATE INDEX IF NOT EXISTS idx_isps_org_patient ON individual_service_plans(org_
 CREATE INDEX IF NOT EXISTS idx_isps_org_created ON individual_service_plans(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_isps_org_status ON individual_service_plans(org_id, status);
 -- END ISP_BUILDER_SCHEMA
+
+-- BEGIN SIMILARITY_GUARDRAILS_SCHEMA
+-- Copy-paste / fraud detector: flags a new report when it is textually very
+-- similar to a prior report written by the same clinician. Score is a 0-1
+-- Jaccard similarity over word shingles, computed in application code
+-- (see computeReportSimilarity() in server.js) and stored for audit/display.
+ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_score NUMERIC;
+ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_flagged BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_matched_report_id UUID REFERENCES ai_reports(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ai_reports_org_created_by ON ai_reports(org_id, created_by);
+CREATE INDEX IF NOT EXISTS idx_ai_reports_similarity_flagged ON ai_reports(org_id, similarity_flagged) WHERE similarity_flagged = TRUE;
+-- END SIMILARITY_GUARDRAILS_SCHEMA

@@ -1,0 +1,197 @@
+diff --git a/db/schema.sql b/db/schema.sql
+index 7cdb1be..48a5548 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -405,3 +405,16 @@ CREATE INDEX IF NOT EXISTS idx_isps_org_patient ON individual_service_plans(org_
+ CREATE INDEX IF NOT EXISTS idx_isps_org_created ON individual_service_plans(org_id, created_at DESC);
+ CREATE INDEX IF NOT EXISTS idx_isps_org_status ON individual_service_plans(org_id, status);
+ -- END ISP_BUILDER_SCHEMA
++
++-- BEGIN SIMILARITY_GUARDRAILS_SCHEMA
++-- Copy-paste / fraud detector: flags a new report when it is textually very
++-- similar to a prior report written by the same clinician. Score is a 0-1
++-- Jaccard similarity over word shingles, computed in application code
++-- (see computeReportSimilarity() in server.js) and stored for audit/display.
++ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_score NUMERIC;
++ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_flagged BOOLEAN NOT NULL DEFAULT FALSE;
++ALTER TABLE ai_reports ADD COLUMN IF NOT EXISTS similarity_matched_report_id UUID REFERENCES ai_reports(id) ON DELETE SET NULL;
++
++CREATE INDEX IF NOT EXISTS idx_ai_reports_org_created_by ON ai_reports(org_id, created_by);
++CREATE INDEX IF NOT EXISTS idx_ai_reports_similarity_flagged ON ai_reports(org_id, similarity_flagged) WHERE similarity_flagged = TRUE;
++-- END SIMILARITY_GUARDRAILS_SCHEMA
+diff --git a/public/app.js b/public/app.js
+index 2f2c60f..2428553 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -1202,11 +1202,27 @@ function resourceTable(resource, rows, compact = false) {
+     const date = r.session_date || r.event_time || r.incident_date || r.created_at;
+     const title = r.title || r.behavior || r.category || r.report_type || r.location || "Record";
+     return [
+-      escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(dateInput(date) || fmtDate(date)), escapeHtml(title), escapeHtml(r.created_by_name || r.user_name || ""), fmtDate(r.created_at), escapeHtml(r.modified_by_name || ""), r.modified_at ? fmtDate(r.modified_at) : "", `<button class="link-btn" data-open-resource="${resource}" data-resource="${resource}" data-id="${r.id}">Open</button>${isAdmin() && !compact ? ` <button class="link-btn danger" data-delete-resource="${resource}" data-id="${r.id}">Delete</button>` : ""}`
++      escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(dateInput(date) || fmtDate(date)), escapeHtml(title) + similarityBadgeHtml(resource, r), escapeHtml(r.created_by_name || r.user_name || ""), fmtDate(r.created_at), escapeHtml(r.modified_by_name || ""), r.modified_at ? fmtDate(r.modified_at) : "", `<button class="link-btn" data-open-resource="${resource}" data-resource="${resource}" data-id="${r.id}">Open</button>${isAdmin() && !compact ? ` <button class="link-btn danger" data-delete-resource="${resource}" data-id="${r.id}">Delete</button>` : ""}`
+     ];
+   });
+   return tableHtml(headers, cells);
+ }
++function similarityWarningHtml(resource, item = {}) {
++  if (resource !== "reports" || !item.similarity_flagged) return "";
++  const pct = Math.round((Number(item.similarity_score) || 0) * 100);
++  return `<div class="notice warning similarity-warning">
++    <strong>Possible copy-paste note (${pct}% text overlap)</strong>
++    <p>This note is textually very similar to a prior note you wrote. Review for documentation-fraud/audit risk before submitting.
++      ${item.similarity_matched_report_id ? `<button class="link-btn" type="button" data-open-resource="reports" data-resource="reports" data-id="${item.similarity_matched_report_id}">View the prior note</button>` : ""}
++    </p>
++  </div>`;
++}
++
++function similarityBadgeHtml(resource, r = {}) {
++  if (resource !== "reports" || !r.similarity_flagged) return "";
++  const pct = Math.round((Number(r.similarity_score) || 0) * 100);
++  return ` <span class="risk-badge medium" title="Textually similar to a prior note by this author">⚠ ${pct}% similar</span>`;
++}
+ function statusBadge(status = "draft") { return `<span class="status ${String(status).toLowerCase().replaceAll(" ", "-")}">${escapeHtml(status || "Draft")}</span>`; }
+ 
+ async function loadResourceList(resource) {
+@@ -1273,6 +1289,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
+   const title = isNew ? `New ${def.singular}` : `${def.title.slice(0, -1)} detail`;
+   detail.innerHTML = `<section class="detail-card" data-resource="${resource}" data-id="${item.id || ""}">
+     <div class="detail-head"><div><p class="eyebrow">${statusBadge(item.status || "Draft")}</p><h3>${title}</h3></div><div class="detail-actions">${!isNew && disabled ? `<button class="btn small" data-edit="${resource}">Edit</button>` : ""}<button class="btn small secondary" data-back-list="${resource}">Back to list</button></div></div>
++    ${similarityWarningHtml(resource, item)}
+     <div class="voice-tools"><button class="btn small mic" data-voice-resource="${resource}" data-voice-target="${def.voiceField}">Start voice</button><button class="btn small secondary" data-stop-voice hidden>Stop</button><span class="voice-status">Not recording</span></div>
+     <form id="${resource}Form" class="form-card resource-form">
+       <div class="form-grid">${def.fields.map(f => fieldHtml(f, item, disabled)).join("")}</div>
+@@ -1305,6 +1322,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
+   detail.querySelector(`[data-save-report-s3]`)?.addEventListener("click", e => { e.preventDefault(); saveReportFileToS3(item.id); });
+   detail.querySelector(`[data-export-docx]`)?.addEventListener("click", e => { e.preventDefault(); exportDocx(resource, item); });
+   detail.querySelector(`[data-export-pdf]`)?.addEventListener("click", e => { e.preventDefault(); exportPdf(resource, item); });
++  detail.querySelector(`.similarity-warning [data-open-resource]`)?.addEventListener("click", e => { e.preventDefault(); openResourceDetail("reports", e.target.dataset.id); });
+   if (item.id) loadAttachments(resource, item.id);
+ }
+ function canActOnReview(item) { return item?.status === "Under Review" && (item.review_assigned_to === currentUser?.id || isAdmin()); }
+diff --git a/public/styles.css b/public/styles.css
+index 23709ab..3f129df 100644
+--- a/public/styles.css
++++ b/public/styles.css
+@@ -38,3 +38,10 @@ body[data-page="public"] #userNav{display:none!important}
+ .password-checklist li.ok{color:#065f46}
+ .password-checklist li.ok .pw-check-icon{background:#ecfdf5;color:#059669}
+ .password-checklist li.fail .pw-check-icon{background:#fff1f2;color:#be123c}
++
++/* --- Similarity guardrails (copy-paste / templated-note detector) --- */
++.notice.warning,.similarity-warning{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
++.similarity-warning{border-radius:16px;padding:14px 16px;margin-bottom:16px}
++.similarity-warning strong{display:block;margin-bottom:4px;color:#92400e}
++.similarity-warning p{margin:0;line-height:1.5}
++.similarity-warning .link-btn{color:#92400e;text-decoration:underline;padding:0 0 0 4px}
+diff --git a/server.js b/server.js
+index 6278aca..3c1e982 100644
+--- a/server.js
++++ b/server.js
+@@ -175,6 +175,7 @@ const resourceConfigs = {
+     insertColumns: ["patient_id", "report_type", "prompt", "output", "status"],
+     updateColumns: ["patient_id", "report_type", "prompt", "output", "status"],
+     required: ["patient_id", "output"],
++    similarityField: "output",
+     select: `s.*, p.first_name, p.last_name, cu.full_name AS created_by_name, mu.full_name AS modified_by_name, ru.full_name AS reviewed_by_name, au.full_name AS review_assigned_to_name`
+   },
+ 
+@@ -482,6 +483,61 @@ function cleanValue(column, value, cfg) {
+   return value ?? null;
+ }
+ 
++// --- Similarity guardrails (copy-paste / templated-note detector) ---------
++// Cheap, dependency-free heuristic: Jaccard similarity over 8-word shingles.
++// This catches near-verbatim reused notes (a common documentation-fraud /
++// audit-risk pattern) without needing an embeddings model or external call.
++const SIMILARITY_FLAG_THRESHOLD = 0.30;
++const SIMILARITY_SHINGLE_SIZE = 8;
++const SIMILARITY_MIN_WORDS = 25; // skip very short notes; too noisy to score meaningfully
++
++function textShingles(text = "") {
++  const words = String(text || "")
++    .toLowerCase()
++    .replace(/[^a-z0-9\s]/g, " ")
++    .split(/\s+/)
++    .filter(Boolean);
++  if (words.length < SIMILARITY_MIN_WORDS) return null;
++  const shingles = new Set();
++  for (let i = 0; i <= words.length - SIMILARITY_SHINGLE_SIZE; i++) {
++    shingles.add(words.slice(i, i + SIMILARITY_SHINGLE_SIZE).join(" "));
++  }
++  return shingles;
++}
++
++function jaccardSimilarity(setA, setB) {
++  if (!setA || !setB || !setA.size || !setB.size) return 0;
++  let intersection = 0;
++  const [smaller, larger] = setA.size <= setB.size ? [setA, setB] : [setB, setA];
++  for (const shingle of smaller) if (larger.has(shingle)) intersection++;
++  const union = setA.size + setB.size - intersection;
++  return union ? intersection / union : 0;
++}
++
++// Compares a report's text against this clinician's other reports in the
++// same org (excluding the record being updated, if any) and returns the
++// highest similarity match. Scoped to the same author by design: the point
++// is to catch one clinician recycling their own notes, not to flag two
++// different clinicians independently describing a similar session.
++async function computeReportSimilarity(req, text, excludeId = null) {
++  const shinglesNew = textShingles(text);
++  if (!shinglesNew) return { score: 0, flagged: false, matchedId: null };
++  const priorRows = (await pool.query(
++    `SELECT id, output FROM ai_reports
++     WHERE org_id=$1 AND created_by=$2 ${excludeId ? "AND id<>$3" : ""}
++     ORDER BY created_at DESC LIMIT 50`,
++    excludeId ? [req.user.org_id, req.user.id, excludeId] : [req.user.org_id, req.user.id]
++  )).rows;
++  let best = { score: 0, flagged: false, matchedId: null };
++  for (const row of priorRows) {
++    const shinglesPrior = textShingles(row.output);
++    if (!shinglesPrior) continue;
++    const score = jaccardSimilarity(shinglesNew, shinglesPrior);
++    if (score > best.score) best = { score, flagged: score >= SIMILARITY_FLAG_THRESHOLD, matchedId: row.id };
++  }
++  return best;
++}
++
+ 
+ function encodeS3Key(key) {
+   return String(key).split("/").map(part => encodeURIComponent(part)).join("/");
+@@ -856,12 +912,20 @@ async function insertRecord(req, cfg, body) {
+   if (body.patient_id && !(await assertPatient(req, body.patient_id))) {
+     throw Object.assign(new Error("Patient not found."), { status: 404 });
+   }
++  let similarity = null;
++  if (cfg.similarityField && body[cfg.similarityField]) {
++    similarity = await computeReportSimilarity(req, body[cfg.similarityField]);
++  }
+   const cols = ["org_id", cfg.createdByField, ...cfg.insertColumns];
+   const values = [req.user.org_id, req.user.id, ...cfg.insertColumns.map(c => cleanValue(c, body[c], cfg))];
++  if (similarity) {
++    cols.push("similarity_score", "similarity_flagged", "similarity_matched_report_id");
++    values.push(similarity.score || null, !!similarity.flagged, similarity.matchedId || null);
++  }
+   const placeholders = values.map((_, i) => `$${i + 1}`);
+   const sql = `INSERT INTO ${cfg.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`;
+   const row = (await pool.query(sql, values)).rows[0];
+-  await audit(req, `${cfg.singular}_created`, cfg.singular, row.id, { patient_id: body.patient_id || null });
++  await audit(req, `${cfg.singular}_created`, cfg.singular, row.id, { patient_id: body.patient_id || null, similarity_flagged: similarity?.flagged || false });
+   return row;
+ }
+ 
+@@ -881,6 +945,15 @@ async function updateRecord(req, cfg, id, body, options = {}) {
+       sets.push(`${col}=$${values.length}`);
+     }
+   }
++  if (cfg.similarityField && Object.prototype.hasOwnProperty.call(body, cfg.similarityField) && body[cfg.similarityField]) {
++    const similarity = await computeReportSimilarity(req, body[cfg.similarityField], id);
++    values.push(similarity.score || null);
++    sets.push(`similarity_score=$${values.length}`);
++    values.push(!!similarity.flagged);
++    sets.push(`similarity_flagged=$${values.length}`);
++    values.push(similarity.matchedId || null);
++    sets.push(`similarity_matched_report_id=$${values.length}`);
++  }
+   values.push(req.user.id);
+   sets.push(`modified_by=$${values.length}`);
+   sets.push(`modified_at=now()`);

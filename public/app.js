@@ -1202,10 +1202,26 @@ function resourceTable(resource, rows, compact = false) {
     const date = r.session_date || r.event_time || r.incident_date || r.created_at;
     const title = r.title || r.behavior || r.category || r.report_type || r.location || "Record";
     return [
-      escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(dateInput(date) || fmtDate(date)), escapeHtml(title), escapeHtml(r.created_by_name || r.user_name || ""), fmtDate(r.created_at), escapeHtml(r.modified_by_name || ""), r.modified_at ? fmtDate(r.modified_at) : "", `<button class="link-btn" data-open-resource="${resource}" data-resource="${resource}" data-id="${r.id}">Open</button>${isAdmin() && !compact ? ` <button class="link-btn danger" data-delete-resource="${resource}" data-id="${r.id}">Delete</button>` : ""}`
+      escapeHtml(patientName(r)), statusBadge(r.status), escapeHtml(dateInput(date) || fmtDate(date)), escapeHtml(title) + similarityBadgeHtml(resource, r), escapeHtml(r.created_by_name || r.user_name || ""), fmtDate(r.created_at), escapeHtml(r.modified_by_name || ""), r.modified_at ? fmtDate(r.modified_at) : "", `<button class="link-btn" data-open-resource="${resource}" data-resource="${resource}" data-id="${r.id}">Open</button>${isAdmin() && !compact ? ` <button class="link-btn danger" data-delete-resource="${resource}" data-id="${r.id}">Delete</button>` : ""}`
     ];
   });
   return tableHtml(headers, cells);
+}
+function similarityWarningHtml(resource, item = {}) {
+  if (resource !== "reports" || !item.similarity_flagged) return "";
+  const pct = Math.round((Number(item.similarity_score) || 0) * 100);
+  return `<div class="notice warning similarity-warning">
+    <strong>Possible copy-paste note (${pct}% text overlap)</strong>
+    <p>This note is textually very similar to a prior note you wrote. Review for documentation-fraud/audit risk before submitting.
+      ${item.similarity_matched_report_id ? `<button class="link-btn" type="button" data-open-resource="reports" data-resource="reports" data-id="${item.similarity_matched_report_id}">View the prior note</button>` : ""}
+    </p>
+  </div>`;
+}
+
+function similarityBadgeHtml(resource, r = {}) {
+  if (resource !== "reports" || !r.similarity_flagged) return "";
+  const pct = Math.round((Number(r.similarity_score) || 0) * 100);
+  return ` <span class="risk-badge medium" title="Textually similar to a prior note by this author">⚠ ${pct}% similar</span>`;
 }
 function statusBadge(status = "draft") { return `<span class="status ${String(status).toLowerCase().replaceAll(" ", "-")}">${escapeHtml(status || "Draft")}</span>`; }
 
@@ -1273,6 +1289,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
   const title = isNew ? `New ${def.singular}` : `${def.title.slice(0, -1)} detail`;
   detail.innerHTML = `<section class="detail-card" data-resource="${resource}" data-id="${item.id || ""}">
     <div class="detail-head"><div><p class="eyebrow">${statusBadge(item.status || "Draft")}</p><h3>${title}</h3></div><div class="detail-actions">${!isNew && disabled ? `<button class="btn small" data-edit="${resource}">Edit</button>` : ""}<button class="btn small secondary" data-back-list="${resource}">Back to list</button></div></div>
+    ${similarityWarningHtml(resource, item)}
     <div class="voice-tools"><button class="btn small mic" data-voice-resource="${resource}" data-voice-target="${def.voiceField}">Start voice</button><button class="btn small secondary" data-stop-voice hidden>Stop</button><span class="voice-status">Not recording</span></div>
     <form id="${resource}Form" class="form-card resource-form">
       <div class="form-grid">${def.fields.map(f => fieldHtml(f, item, disabled)).join("")}</div>
@@ -1305,6 +1322,7 @@ function renderResourceDetail(resource, item = {}, editing = false) {
   detail.querySelector(`[data-save-report-s3]`)?.addEventListener("click", e => { e.preventDefault(); saveReportFileToS3(item.id); });
   detail.querySelector(`[data-export-docx]`)?.addEventListener("click", e => { e.preventDefault(); exportDocx(resource, item); });
   detail.querySelector(`[data-export-pdf]`)?.addEventListener("click", e => { e.preventDefault(); exportPdf(resource, item); });
+  detail.querySelector(`.similarity-warning [data-open-resource]`)?.addEventListener("click", e => { e.preventDefault(); openResourceDetail("reports", e.target.dataset.id); });
   if (item.id) loadAttachments(resource, item.id);
 }
 function canActOnReview(item) { return item?.status === "Under Review" && (item.review_assigned_to === currentUser?.id || isAdmin()); }
