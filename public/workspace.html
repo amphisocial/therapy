@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body data-page="workspace">
   <header class="topbar app-topbar">
@@ -31,41 +32,39 @@
     <section class="workspace" id="workspace">
       <aside class="sidebar">
         <h3>Workspace</h3>
+        <p class="nav-label">Overview</p>
         <button data-panel="dashboard" class="active">Dashboard</button>
         <button data-panel="analytics">Data Analytics</button>
+        <p class="nav-label">Clinical Workspace</p>
         <button data-panel="isps">ISP Builder</button>
         <button data-panel="patients">Patients</button>
         <button data-panel="inbox">Inbox</button>
+        <p class="nav-label">Documentation</p>
         <button data-panel="sessions">Session Log</button>
         <button data-panel="behaviors">Behavior Events</button>
         <button data-panel="plans">Therapy Plans</button>
         <button data-panel="incidents">Incidents</button>
         <button data-panel="reports">AI Reports</button>
+        <p class="nav-label">Administration</p>
         <button data-panel="admin">Admin & Roles</button>
       </aside>
 
       <section class="panel active" id="dashboard">
-        <div class="panel-head"><div><p class="eyebrow">Today</p><h2>Workspace dashboard</h2></div><button class="btn small" id="refreshAll">Refresh</button></div>
-        <div class="metric-grid">
-          <div class="metric"><span id="metricPatients">0</span><label>Patients</label></div>
-          <div class="metric"><span id="metricInbox">0</span><label>Inbox items</label></div>
-          <div class="metric"><span id="metricDrafts">0</span><label>Draft records</label></div>
-          <div class="metric"><span id="metricReviews">0</span><label>Under review</label></div>
-        </div>
-        <div class="notice">Open any page on the left. Lists show saved items; double-click a row or click Open to view/edit. New creates a fresh form.</div>
+        <div class="panel-head"><div><p class="eyebrow">BCBA Overview</p><h2>Workspace dashboard</h2></div><button class="btn small" id="refreshAll">Refresh</button></div>
+        <div id="dashboardMount" class="dashboard-mount"><div class="loading-state">Loading BCBA dashboard…</div></div>
       </section>
 
 
       <section class="panel" id="analytics">
         <div class="panel-head">
           <div>
-            <p class="eyebrow">Clinical intelligence</p>
+            <p class="eyebrow">Clinical intelligence — deep dive</p>
             <h2>Data Analytics</h2>
           </div>
           <button class="btn small" id="refreshAnalytics" type="button">Refresh analytics</button>
         </div>
-        <div class="notice">Track organization trends, patient risk signals, workload, and documentation quality. Risk signals are decision-support indicators and require BCBA review.</div>
-        <div id="analyticsContent" class="analytics-content">Loading analytics...</div>
+        <div class="notice">Full-detail breakdown behind the Dashboard summary: behavior function mix, incident severity, staff workload, patient risk signals, and documentation quality. Risk signals are decision-support indicators and require BCBA review.</div>
+        <div id="analyticsContent" class="analytics-content"><div class="loading-state">Loading analytics…</div></div>
       </section>
 
       <section class="panel" id="patients">
@@ -159,5 +158,7 @@
   </main>
 
   <script src="/app.js"></script>
+  <script src="/charts.js"></script>
+  <script src="/dashboard.js"></script>
 </body>
 </html>

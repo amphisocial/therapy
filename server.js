@@ -1353,6 +1353,53 @@ app.get("/api/analytics/dashboard", requireAuth, requireMfa, async (req, res) =>
   }
 });
 
+// Weekly time-series used by the BCBA dashboard trend charts (caseload activity,
+// documentation throughput). Additive, read-only, org-scoped like the endpoint above.
+app.get("/api/analytics/trends", requireAuth, requireMfa, async (req, res) => {
+  try {
+    const orgId = req.user.org_id;
+    const weeks = Math.min(Math.max(asInt(req.query.weeks) || 12, 4), 26);
+
+    const sessionRows = (await pool.query(`
+      SELECT date_trunc('week', session_date)::date AS wk, count(*)::int AS c
+      FROM session_logs
+      WHERE org_id=$1 AND session_date >= CURRENT_DATE - ($2::int * INTERVAL '1 week')
+      GROUP BY 1 ORDER BY 1`, [orgId, weeks])).rows;
+    const behaviorRows = (await pool.query(`
+      SELECT date_trunc('week', event_time)::date AS wk, count(*)::int AS c
+      FROM behavior_events
+      WHERE org_id=$1 AND event_time >= now() - ($2::int * INTERVAL '1 week')
+      GROUP BY 1 ORDER BY 1`, [orgId, weeks])).rows;
+    const incidentRows = (await pool.query(`
+      SELECT date_trunc('week', incident_date)::date AS wk, count(*)::int AS c
+      FROM incidents
+      WHERE org_id=$1 AND incident_date >= now() - ($2::int * INTERVAL '1 week')
+      GROUP BY 1 ORDER BY 1`, [orgId, weeks])).rows;
+
+    // Build a dense, zero-filled weekly axis so the chart doesn't skip weeks with no activity.
+    const today = new Date();
+    const dayMs = 86400000;
+    const startOfWeek = (d) => { const x = new Date(d); const day = (x.getUTCDay() + 6) % 7; x.setUTCDate(x.getUTCDate() - day); x.setUTCHours(0, 0, 0, 0); return x; };
+    const thisWeek = startOfWeek(today);
+    const axis = [];
+    for (let i = weeks - 1; i >= 0; i--) axis.push(new Date(thisWeek.getTime() - i * 7 * dayMs));
+    const toKey = (d) => new Date(d).toISOString().slice(0, 10);
+    const mapOf = (rows) => Object.fromEntries(rows.map(r => [toKey(r.wk), asInt(r.c)]));
+    const sMap = mapOf(sessionRows), bMap = mapOf(behaviorRows), iMap = mapOf(incidentRows);
+
+    const labels = axis.map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }));
+    const sessions = axis.map(d => sMap[toKey(d)] || 0);
+    const behaviors = axis.map(d => bMap[toKey(d)] || 0);
+    const incidents = axis.map(d => iMap[toKey(d)] || 0);
+
+    await audit(req, "analytics_trends_viewed", "analytics", null);
+    res.json({ weeks, labels, series: { sessions, behaviors, incidents } });
+  } catch (e) {
+    console.error("[analytics-trends]", e.message);
+    res.status(500).json({ error: "analytics_trends_failed", message: "Could not load analytics trends." });
+  }
+});
+
 async function loadWorkbenchContext(orgId, patientId, days) {
   const ctx = { days, generated_at: new Date().toISOString() };
   if (patientId) {
