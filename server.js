@@ -473,7 +473,35 @@ function toBoolean(value) {
   return false;
 }
 
+// Columns typed DATE/TIMESTAMPTZ in the schema, with a safe fallback for
+// each. NOT-NULL columns fall back to "now" so an insert never fails with a
+// raw Postgres type/constraint error; nullable columns just fall back to
+// null (matching their existing optional behavior in the forms).
+const DATE_ONLY_COLUMN_DEFAULTS = {
+  session_date: () => isoDateOf(new Date()),
+  effective_from: () => null,
+  effective_to: () => null
+};
+const TIMESTAMP_COLUMN_DEFAULTS = {
+  event_time: () => new Date().toISOString(),
+  incident_date: () => new Date().toISOString()
+};
+const isValidIsoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+const isValidIsoDateTime = (v) => /^\d{4}-\d{2}-\d{2}([T ][\d:.Z+-]+)?$/.test(v);
+
 function cleanValue(column, value, cfg) {
+  // Checked first (ahead of the generic empty-string-to-null rule below) so
+  // that a missing or free-text value in a date/timestamp column always
+  // resolves to something Postgres will accept, never raw text like
+  // "July 11th" that would surface as an "invalid input syntax" error.
+  if (Object.prototype.hasOwnProperty.call(DATE_ONLY_COLUMN_DEFAULTS, column)) {
+    const v = String(value ?? "").trim();
+    return isValidIsoDate(v) ? v : DATE_ONLY_COLUMN_DEFAULTS[column]();
+  }
+  if (Object.prototype.hasOwnProperty.call(TIMESTAMP_COLUMN_DEFAULTS, column)) {
+    const v = String(value ?? "").trim();
+    return isValidIsoDateTime(v) ? v : TIMESTAMP_COLUMN_DEFAULTS[column]();
+  }
   if (value === "") return null;
   if ((cfg.jsonColumns || []).includes(column)) {
     if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value || []);
@@ -1014,14 +1042,69 @@ async function callOpenAI(prompt, json = false) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
+const MONTH_NAMES = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
+};
+
+function isoDateOf(d) { return d.toISOString().slice(0, 10); }
+
+// Builds a real YYYY-MM-DD from parts, rejecting anything that doesn't round-trip
+// (e.g. "Feb 30") instead of handing a bogus date to Postgres.
+function safeDateParts(year, month, day) {
+  const y = Number(year), m = Number(month), d = Number(day);
+  if (!y || !m || !d || m < 1 || m > 12 || d < 1 || d > 31) return "";
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return "";
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// A year wasn't stated (e.g. "July 11th") — assume the current year, unless
+// that lands more than ~7 months in the future, which more likely means the
+// person meant last year (saying "January 3rd" in December, for instance).
+function inferYear(month, day, now) {
+  const year = now.getUTCFullYear();
+  const guess = new Date(Date.UTC(year, month - 1, day));
+  const diffMonths = (guess - now) / (1000 * 60 * 60 * 24 * 30);
+  return diffMonths > 7 ? year - 1 : year;
+}
+
+// Understands: today/yesterday/tomorrow, ISO (2026-07-11), US (7/11/2026),
+// and natural month-name phrasing in either order with optional ordinal
+// suffixes and optional year: "July 11th", "Jul 11", "11 July 2026",
+// "the 11th of July". Returns "" (not a guess) when nothing matches, so
+// callers can fall back gracefully instead of passing free text to the DB.
 function findDate(text) {
   const now = new Date();
-  if (/\btoday\b/i.test(text)) return now.toISOString().slice(0, 10);
-  if (/\byesterday\b/i.test(text)) { const d = new Date(now); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); }
-  const iso = text.match(/\b(20\d{2}-\d{1,2}-\d{1,2})\b/);
-  if (iso) return iso[1];
-  const us = text.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
-  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  const t = String(text || "");
+  if (/\btoday\b/i.test(t)) return isoDateOf(now);
+  if (/\byesterday\b/i.test(t)) { const d = new Date(now); d.setUTCDate(d.getUTCDate() - 1); return isoDateOf(d); }
+  if (/\btomorrow\b/i.test(t)) { const d = new Date(now); d.setUTCDate(d.getUTCDate() + 1); return isoDateOf(d); }
+
+  const iso = t.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) { const v = safeDateParts(iso[1], iso[2], iso[3]); if (v) return v; }
+
+  const us = t.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (us) { const v = safeDateParts(us[3], us[1], us[2]); if (v) return v; }
+
+  const monthAlt = Object.keys(MONTH_NAMES).sort((a, b) => b.length - a.length).join("|");
+  const monthFirst = t.match(new RegExp(`\\b(${monthAlt})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?\\b`, "i"));
+  if (monthFirst) {
+    const month = MONTH_NAMES[monthFirst[1].toLowerCase()];
+    const day = Number(monthFirst[2]);
+    const year = monthFirst[3] ? Number(monthFirst[3]) : inferYear(month, day, now);
+    const v = safeDateParts(year, month, day);
+    if (v) return v;
+  }
+  const dayFirst = t.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${monthAlt})\\.?(?:,?\\s+(20\\d{2}))?\\b`, "i"));
+  if (dayFirst) {
+    const month = MONTH_NAMES[dayFirst[2].toLowerCase()];
+    const day = Number(dayFirst[1]);
+    const year = dayFirst[3] ? Number(dayFirst[3]) : inferYear(month, day, now);
+    const v = safeDateParts(year, month, day);
+    if (v) return v;
+  }
   return "";
 }
 

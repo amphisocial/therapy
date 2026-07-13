@@ -400,9 +400,58 @@
     return "this patient";
   }
 
+  function isAffirmative(text) {
+    return /^\s*(yes|yep|yeah|yup|sure|correct|that'?s\s+right|looks?\s+good|sounds?\s+good|go\s+ahead|save\s+it|save\s+that|save\s+this|confirm(ed)?|do\s+it|perfect|good|ok|okay)\b/i.test(String(text || "").trim());
+  }
+
+  function truncate(s, n = 160) {
+    const v = String(s || "").trim();
+    return v.length > n ? `${v.slice(0, n - 1)}…` : v;
+  }
+
+  // A plain-language recap of a draft, shown for confirmation before saving
+  // — so the person is reviewing what the assistant understood, not just
+  // trusting it blindly, and mistakes get caught before they're written.
+  function summarizeDraft(resource, f) {
+    if (resource === "sessions") {
+      const when = [f.session_date, f.location && `at ${f.location}`].filter(Boolean).join(" ");
+      let s = `a session${when ? ` ${when}` : ""}`;
+      if (f.activities) s += `. Activities: ${truncate(f.activities)}`;
+      if (f.response_to_intervention) s += `. Client response: ${truncate(f.response_to_intervention)}`;
+      return s;
+    }
+    if (resource === "behaviors") {
+      let s = `a behavior event — ${truncate(f.behavior)}`;
+      if (f.antecedent) s += `. Antecedent: ${truncate(f.antecedent)}`;
+      if (f.consequence) s += `. Consequence: ${truncate(f.consequence)}`;
+      if (f.intensity) s += `. Intensity: ${f.intensity}/5`;
+      return s;
+    }
+    if (resource === "incidents") {
+      let s = `a${/^[aeiou]/i.test(f.severity || "") ? "n" : ""} ${f.severity || "low"}-severity ${f.category || "general"} incident — ${truncate(f.description)}`;
+      if (f.immediate_actions) s += `. Immediate actions: ${truncate(f.immediate_actions)}`;
+      return s;
+    }
+    if (resource === "plans") {
+      let s = `a therapy plan titled "${truncate(f.title, 60)}"`;
+      if (f.goals) s += `. Goals: ${truncate(f.goals)}`;
+      if (f.interventions) s += `. Interventions: ${truncate(f.interventions)}`;
+      return s;
+    }
+    return "the record";
+  }
+
   async function extractAndAskOrCreate(state, msgEl, latestReply) {
     const draft = state.pendingRecord;
     const def = RECORD_DEFS[draft.resource];
+
+    // If we're just waiting on a yes/no, handle that first — no need to
+    // re-run extraction on "yes".
+    if (draft.awaitingConfirm) {
+      if (isAffirmative(latestReply)) { await saveDraftRecord(state, msgEl); return; }
+      draft.awaitingConfirm = false; // treat the reply as a correction and fall through
+    }
+
     window.setMessage && window.setMessage(msgEl, "Reading through what you shared…", "info");
     try {
       const out = await window.api("/api/ai/extract-fields", {
@@ -444,6 +493,20 @@
       return;
     }
 
+    // Everything needed is filled — recap it in plain language and ask
+    // before writing anything, rather than saving blind and only finding
+    // out something was wrong (or unparseable) after the fact.
+    draft.lastMissing = [];
+    draft.awaitingConfirm = true;
+    window.saveBcbaChatState();
+    const summary = summarizeDraft(draft.resource, draft.fields);
+    pushAssistant(state, { text: `Here's what I've got — I'll save this as ${summary}. Want me to save it as a draft? Say "yes" to confirm, or tell me what to change.` });
+    window.setMessage && window.setMessage(msgEl, "Waiting on your confirmation.", "info");
+  }
+
+  async function saveDraftRecord(state, msgEl) {
+    const draft = state.pendingRecord;
+    const def = RECORD_DEFS[draft.resource];
     window.setMessage && window.setMessage(msgEl, `Saving the ${def.label.toLowerCase()} draft…`, "info");
     try {
       const payload = { ...draft.fields, patient_id: state.patient_id, status: "draft" };
@@ -508,7 +571,10 @@
         pushAssistant(state, { text: "No problem — canceled that draft. What else can I help with?" });
         return;
       }
-      state.pendingRecord.collectedText += `\n${question}`;
+      const draft = state.pendingRecord;
+      if (!(draft.awaitingConfirm && isAffirmative(question))) {
+        draft.collectedText += `\n${question}`;
+      }
       window.saveBcbaChatState();
       await extractAndAskOrCreate(state, msgEl, question);
       return;
@@ -520,7 +586,7 @@
         pushAssistant(state, { text: `I can do that. Which patient is this for? Pick one from the patient dropdown above, then tell me again.` });
         return;
       }
-      state.pendingRecord = { resource: intent, collectedText: question, fields: {}, lastMissing: [] };
+      state.pendingRecord = { resource: intent, collectedText: question, fields: {}, lastMissing: [], awaitingConfirm: false };
       window.saveBcbaChatState();
       await extractAndAskOrCreate(state, msgEl, null);
       return;
