@@ -400,7 +400,7 @@
     return "this patient";
   }
 
-  async function extractAndAskOrCreate(state, msgEl) {
+  async function extractAndAskOrCreate(state, msgEl, latestReply) {
     const draft = state.pendingRecord;
     const def = RECORD_DEFS[draft.resource];
     window.setMessage && window.setMessage(msgEl, "Reading through what you shared…", "info");
@@ -416,8 +416,27 @@
       console.warn("[chat] extract-fields failed", e.message);
     }
 
-    const missing = def.target.filter((f) => !draft.fields[f.name] || !String(draft.fields[f.name]).trim());
+    let missing = def.target.filter((f) => !draft.fields[f.name] || !String(draft.fields[f.name]).trim());
+
+    // Guaranteed-progress safety net: the local extractor does simple text
+    // matching and can miss valid answers (e.g. "the client responded
+    // positively" doesn't literally contain the word "response"). If we
+    // asked about this exact set of fields last turn and the user replied
+    // but extraction still didn't fill any of them, don't ask the same
+    // question again — take their literal reply as the answer to the first
+    // field we asked about. This guarantees the conversation always moves
+    // forward instead of looping.
+    if (
+      missing.length && latestReply && !isCancelPhrase(latestReply) &&
+      draft.lastMissing && draft.lastMissing.length === missing.length &&
+      missing.every((f, i) => f.name === draft.lastMissing[i])
+    ) {
+      draft.fields[missing[0].name] = latestReply.trim();
+      missing = def.target.filter((f) => !draft.fields[f.name] || !String(draft.fields[f.name]).trim());
+    }
+
     if (missing.length) {
+      draft.lastMissing = missing.map((f) => f.name);
       window.saveBcbaChatState();
       const ask = missing.slice(0, 3).map((f) => f.label).join(", ");
       pushAssistant(state, { text: `Got it — I've filled in what I could for the ${def.label.toLowerCase()}. I still need: ${ask}. Feel free to answer all at once, or say "cancel" to drop this.` });
@@ -491,7 +510,7 @@
       }
       state.pendingRecord.collectedText += `\n${question}`;
       window.saveBcbaChatState();
-      await extractAndAskOrCreate(state, msgEl);
+      await extractAndAskOrCreate(state, msgEl, question);
       return;
     }
 
@@ -501,9 +520,9 @@
         pushAssistant(state, { text: `I can do that. Which patient is this for? Pick one from the patient dropdown above, then tell me again.` });
         return;
       }
-      state.pendingRecord = { resource: intent, collectedText: question, fields: {} };
+      state.pendingRecord = { resource: intent, collectedText: question, fields: {}, lastMissing: [] };
       window.saveBcbaChatState();
-      await extractAndAskOrCreate(state, msgEl);
+      await extractAndAskOrCreate(state, msgEl, null);
       return;
     }
 

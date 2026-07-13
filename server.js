@@ -1047,7 +1047,7 @@ function heuristicExtract(resourceType, text) {
     if (location) fields.location = location;
     fields.activities = extractAfter(t, ["activities", "activity", "worked on", "completed"]) || t;
     fields.interventions_used = extractAfter(t, ["interventions", "intervention", "used"]);
-    fields.response_to_intervention = extractAfter(t, ["response", "client response"]);
+    fields.response_to_intervention = extractAfter(t, ["response to intervention", "how they responded", "how the client responded", "client responded", "responded", "response", "client response", "reacted", "reaction"]) || "";
     fields.progress_notes = t;
   } else if (resourceType === "behaviors") {
     if (location) fields.location = location;
