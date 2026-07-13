@@ -100,15 +100,24 @@
 
   // ---------------------------------------------------------------------
   // Speech (Web Speech API) — dictation + hands-free voice mode
+  //
+  // Voice mode is a small explicit state machine, on purpose: the browser's
+  // built-in "stop listening after a pause" behavior is unreliable and cuts
+  // people off mid-sentence, then the assistant starts speaking over them.
+  // Instead the user always gives an explicit start/stop signal:
+  //   off -> ready -> listening -> (user taps Stop) -> thinking -> speaking -> ready
+  // The assistant only ever speaks after the user has explicitly stopped
+  // listening, and the mic is fully stopped while it speaks so it can't
+  // pick up its own voice or talk over the user.
   // ---------------------------------------------------------------------
   const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const speechSupported = !!SpeechRecognitionCtor;
   const ttsSupported = "speechSynthesis" in window;
 
   let recognizer = null;
-  let dictating = false;      // single push-to-talk dictation into the input
-  let voiceModeOn = false;    // hands-free continuous back-and-forth
-  let voiceBusy = false;      // true while assistant is "thinking" or speaking (pause mic)
+  let dictating = false;              // single push-to-talk dictation into the input
+  let voicePhase = "off";             // off | ready | listening | thinking | speaking
+  let voiceFinalText = "";
   let preferredVoice = null;
 
   function pickVoice() {
@@ -145,7 +154,9 @@
   }
 
   function stopRecognition() {
-    try { recognizer && recognizer.stop(); } catch {}
+    if (!recognizer) return;
+    recognizer.onend = null; // don't let the stale handler auto-restart/react
+    try { recognizer.stop(); } catch {}
   }
 
   function speak(text, onDone) {
@@ -155,12 +166,7 @@
     if (preferredVoice) utter.voice = preferredVoice;
     utter.rate = 1.02;
     utter.pitch = 1;
-    voiceBusy = true;
-    setVoiceStatus("Speaking…", "speaking");
-    utter.onend = utter.onerror = () => {
-      voiceBusy = false;
-      onDone && onDone();
-    };
+    utter.onend = utter.onerror = () => onDone && onDone();
     window.speechSynthesis.speak(utter);
   }
 
@@ -171,35 +177,41 @@
     recognizer.lang = "en-US";
     recognizer.interimResults = true;
     recognizer.maxAlternatives = 1;
-    recognizer.continuous = false;
     return recognizer;
   }
 
-  // Single dictation: fills the textarea, does not auto-send.
+  // Single dictation into the textbox (does not auto-send). Continuous mode
+  // + explicit stop, so it doesn't cut a sentence off during a short pause.
   function toggleDictation() {
     if (!speechSupported) {
       setVoiceStatus("Voice input isn't supported in this browser. Try Chrome or Edge.", "error");
       return;
     }
-    if (dictating) { stopRecognition(); return; }
-    if (voiceModeOn) toggleVoiceMode(); // don't run both modes at once
+    if (dictating) { stopRecognition(); dictating = false; updateMicButton(); setVoiceStatus("", ""); return; }
+    if (voicePhase !== "off") exitVoiceMode();
     const rec = ensureRecognizer();
+    rec.continuous = true;
     const input = $("#bcbaChatInput");
     const baseText = input ? input.value : "";
     dictating = true;
     updateMicButton();
-    setVoiceStatus("Listening…", "listening");
+    setVoiceStatus("Listening… tap the mic again when you're done.", "listening");
+    let finalText = "";
     rec.onresult = (ev) => {
-      let interim = "", final = "";
+      let interim = "";
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const r = ev.results[i];
-        if (r.isFinal) final += r[0].transcript; else interim += r[0].transcript;
+        if (r.isFinal) finalText += (finalText ? " " : "") + r[0].transcript.trim();
+        else interim += r[0].transcript;
       }
-      if (input) input.value = (baseText ? baseText + " " : "") + final + interim;
-      autoResize(input);
+      if (input) { input.value = [baseText, finalText, interim].filter(Boolean).join(" "); autoResize(input); }
     };
-    rec.onerror = () => { dictating = false; updateMicButton(); setVoiceStatus("", ""); };
-    rec.onend = () => { dictating = false; updateMicButton(); setVoiceStatus("", ""); };
+    rec.onerror = (ev) => {
+      if (ev.error === "no-speech" || ev.error === "aborted") return;
+      dictating = false; updateMicButton();
+      setVoiceStatus(`Mic error: ${esc(ev.error || "unknown")}.`, "error");
+    };
+    rec.onend = () => { if (dictating) { try { rec.start(); } catch { dictating = false; updateMicButton(); } } };
     try { rec.start(); } catch { dictating = false; updateMicButton(); }
   }
 
@@ -207,58 +219,102 @@
     const btn = $("#bcbaChatMicBtn");
     if (btn) btn.classList.toggle("active", dictating);
   }
-  function updateVoiceModeButton() {
+
+  // ---- Hands-free voice mode: explicit start/stop, no auto-endpointing ----
+  function renderVoiceControls() {
     const btn = $("#tacVoiceModeBtn");
-    if (btn) { btn.classList.toggle("active", voiceModeOn); btn.textContent = voiceModeOn ? "Exit voice chat" : "Talk"; }
+    const exitBtn = $("#tacVoiceExitBtn");
+    if (!btn) return;
+    if (exitBtn) exitBtn.hidden = voicePhase === "off";
+    btn.disabled = voicePhase === "thinking";
+    btn.classList.toggle("active", voicePhase === "listening");
+    switch (voicePhase) {
+      case "off": btn.textContent = "🎙️ Talk"; setVoiceStatus("", ""); break;
+      case "ready": btn.textContent = "🎤 Tap to speak"; setVoiceStatus("Voice chat on — tap the mic, talk, then tap it again when you're done.", "ready"); break;
+      case "listening": btn.textContent = "⏹ Stop & send"; setVoiceStatus("Listening… tap Stop when you're finished talking.", "listening"); break;
+      case "thinking": btn.textContent = "…"; setVoiceStatus("Thinking…", "thinking"); break;
+      case "speaking": btn.textContent = "🎤 Tap to interrupt"; setVoiceStatus("Speaking… tap the mic to interrupt and reply.", "speaking"); break;
+    }
   }
 
-  // Hands-free: listen -> auto-send -> speak reply -> listen again.
-  function toggleVoiceMode() {
+  function enterVoiceMode() {
     if (!speechSupported || !ttsSupported) {
       setVoiceStatus("Hands-free voice chat needs speech recognition and speech synthesis, which this browser doesn't fully support. Try Chrome or Edge.", "error");
       return;
     }
-    voiceModeOn = !voiceModeOn;
-    updateVoiceModeButton();
-    if (!voiceModeOn) {
-      stopRecognition();
-      try { window.speechSynthesis.cancel(); } catch {}
-      voiceBusy = false;
-      setVoiceStatus("", "");
-      return;
-    }
-    if (dictating) stopRecognition();
-    voiceListenLoop();
+    if (dictating) { stopRecognition(); dictating = false; updateMicButton(); }
+    voicePhase = "ready";
+    renderVoiceControls();
   }
 
-  function voiceListenLoop() {
-    if (!voiceModeOn || voiceBusy) return;
+  function exitVoiceMode() {
+    stopRecognition();
+    try { window.speechSynthesis.cancel(); } catch {}
+    voicePhase = "off";
+    renderVoiceControls();
+  }
+
+  function startListening() {
     const rec = ensureRecognizer();
-    setVoiceStatus("Listening…", "listening");
+    rec.continuous = true;
+    voiceFinalText = "";
+    const input = $("#bcbaChatInput");
+    if (input) { input.value = ""; autoResize(input); }
     rec.onresult = (ev) => {
-      let final = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) if (ev.results[i].isFinal) final += ev.results[i][0].transcript;
-      if (final.trim()) {
-        const input = $("#bcbaChatInput");
-        if (input) input.value = final.trim();
-        setVoiceStatus("Thinking…", "thinking");
-        submitChat();
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        if (r.isFinal) voiceFinalText += (voiceFinalText ? " " : "") + r[0].transcript.trim();
+        else interim += r[0].transcript;
       }
+      if (input) { input.value = [voiceFinalText, interim].filter(Boolean).join(" "); autoResize(input); }
     };
     rec.onerror = (ev) => {
-      if (ev.error === "no-speech" || ev.error === "aborted") { if (voiceModeOn && !voiceBusy) setTimeout(voiceListenLoop, 300); return; }
-      setVoiceStatus(`Voice chat error: ${esc(ev.error || "unknown")}. Tap Talk to try again.`, "error");
-      voiceModeOn = false;
-      updateVoiceModeButton();
+      if (ev.error === "no-speech" || ev.error === "aborted") return; // keep listening, user controls stop
+      setVoiceStatus(`Mic error: ${esc(ev.error || "unknown")}. Tap the mic to try again.`, "error");
+      voicePhase = "ready";
+      renderVoiceControls();
     };
-    rec.onend = () => { if (voiceModeOn && !voiceBusy) setTimeout(voiceListenLoop, 250); };
-    try { rec.start(); } catch {}
+    // Some browsers end recognition on their own after a long pause even in
+    // continuous mode; if the user hasn't tapped Stop yet, just restart
+    // quietly so it never silently drops out of listening.
+    rec.onend = () => { if (voicePhase === "listening") { try { rec.start(); } catch {} } };
+    voicePhase = "listening";
+    renderVoiceControls();
+    try { rec.start(); } catch { voicePhase = "ready"; renderVoiceControls(); }
   }
 
-  function speakIfVoiceMode(text) {
-    if (!voiceModeOn) return;
+  function stopListeningAndSend() {
     stopRecognition();
-    speak(text, () => { if (voiceModeOn) voiceListenLoop(); });
+    const input = $("#bcbaChatInput");
+    const text = (input?.value || "").trim();
+    if (!text) { voicePhase = "ready"; renderVoiceControls(); return; }
+    voicePhase = "thinking";
+    renderVoiceControls();
+    submitChat();
+  }
+
+  function interruptSpeaking() {
+    try { window.speechSynthesis.cancel(); } catch {}
+    startListening();
+  }
+
+  function onVoiceModeBtnClick() {
+    if (voicePhase === "off") return enterVoiceMode();
+    if (voicePhase === "ready") return startListening();
+    if (voicePhase === "listening") return stopListeningAndSend();
+    if (voicePhase === "speaking") return interruptSpeaking();
+    // "thinking": ignore taps until the response comes back
+  }
+
+  // Called once an assistant reply is ready. Only speaks (and only takes
+  // over the mic) if the user is in voice mode; otherwise a no-op.
+  function speakIfVoiceMode(text) {
+    if (voicePhase === "off") return;
+    stopRecognition();
+    voicePhase = "speaking";
+    renderVoiceControls();
+    speak(text, () => { if (voicePhase !== "off") { voicePhase = "ready"; renderVoiceControls(); } });
   }
 
   function autoResize(el) {
@@ -503,7 +559,8 @@
             <div class="tac-input-row">
               <textarea id="bcbaChatInput" rows="1" placeholder="Message the BCBA Agent, or say what you need…"></textarea>
               <button class="tac-icon-btn" id="bcbaChatMicBtn" type="button" title="Dictate">🎤</button>
-              <button class="tac-icon-btn" id="tacVoiceModeBtn" type="button" title="Hands-free voice chat">Talk</button>
+              <button class="tac-icon-btn" id="tacVoiceModeBtn" type="button" title="Hands-free voice chat">🎙️ Talk</button>
+              <button class="tac-icon-btn tac-exit-btn" id="tacVoiceExitBtn" type="button" title="Exit voice chat" hidden>Exit</button>
               <button class="tac-send-btn" type="submit" title="Send">➤</button>
             </div>
           </form>
@@ -514,7 +571,7 @@
     window.renderBcbaChatMessages();
     window.bindBcbaChatSessionListEvents && window.bindBcbaChatSessionListEvents();
     updateMicButton();
-    updateVoiceModeButton();
+    renderVoiceControls();
 
     const input = $("#bcbaChatInput");
     input?.addEventListener("input", () => autoResize(input));
@@ -528,7 +585,8 @@
     $("#bcbaChatForm")?.addEventListener("submit", sendBcbaChatMessagePro);
     $("#bcbaChatGenerateIsp")?.addEventListener("click", () => window.generateIspFromBcbaChat && window.generateIspFromBcbaChat());
     $("#bcbaChatMicBtn")?.addEventListener("click", toggleDictation);
-    $("#tacVoiceModeBtn")?.addEventListener("click", toggleVoiceMode);
+    $("#tacVoiceModeBtn")?.addEventListener("click", onVoiceModeBtnClick);
+    $("#tacVoiceExitBtn")?.addEventListener("click", exitVoiceMode);
     $$("[data-chat-suggest]", mount).forEach((b) => b.onclick = () => {
       if (input) { input.value = b.dataset.chatSuggest || ""; autoResize(input); input.focus(); }
     });
